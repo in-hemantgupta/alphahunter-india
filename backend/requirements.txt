@@ -21,7 +21,7 @@ groq==0.18.0
 pymupdf==1.25.5
 qdrant-client==1.13.3
 yfinance==0.2.65
-pytrends==12.0.0
+pytrends==4.9.2
 polars==1.27.1
 pyarrow==19.0.1
 celery==5.4.0
