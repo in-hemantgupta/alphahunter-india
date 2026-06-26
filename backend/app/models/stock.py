@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer
+from sqlalchemy import Column, String, Integer, BigInteger
 from app.db.base import Base
 
 
@@ -10,4 +10,4 @@ class Stock(Base):
     sector = Column(String)
     exchange = Column(String)
     isin = Column(String)
-    market_cap = Column(Integer)
+    market_cap = Column(BigInteger)
