@@ -2,27 +2,11 @@ import pandas as pd
 
 
 def build_stock_universe():
-
-    nse = pd.read_csv(
-
-        "nse_equity.csv"
-    )
-
-    bse = pd.read_csv(
-
-        "bse_equity.csv"
-    )
-
-    combined = pd.concat(
-
-        [nse, bse]
-    )
-
-    combined = \
-
-        combined.drop_duplicates(
-
-            subset=["symbol"]
-        )
-
-    return combined
+    """Fetch NSE equity list from official source."""
+    try:
+        url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
+        df = pd.read_csv(url)
+        return df
+    except Exception as e:
+        print(f"Error fetching universe: {e}")
+        return None

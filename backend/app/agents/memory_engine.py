@@ -1,36 +1,74 @@
-from qdrant_client import QdrantClient
+from app.core.config import settings
 
 
-client = QdrantClient(host="localhost", port=6333)
+try:
+
+    from qdrant_client import QdrantClient
+
+    client = QdrantClient(
+
+        host=settings.QDRANT_HOST,
+
+        port=settings.QDRANT_PORT
+
+    )
+
+    QDRANT_AVAILABLE = True
+
+except Exception:
+
+    client = None
+
+    QDRANT_AVAILABLE = False
 
 
 def store_memory(embedding, metadata):
 
-    client.upsert(
+    if not QDRANT_AVAILABLE:
 
-        collection_name="agent_memory",
+        return
 
-        points=[{
+    try:
 
-            "vector": embedding,
+        client.upsert(
 
-            "payload": metadata
+            collection_name="agent_memory",
 
-        }]
+            points=[{
 
-    )
+                "vector": embedding,
+
+                "payload": metadata
+
+            }]
+
+        )
+
+    except Exception:
+
+        pass
 
 
 def recall_memory(query_embedding):
 
-    results = client.search(
+    if not QDRANT_AVAILABLE:
 
-        collection_name="agent_memory",
+        return []
 
-        query_vector=query_embedding,
+    try:
 
-        limit=5
+        results = client.search(
 
-    )
+            collection_name="agent_memory",
 
-    return results
+            query_vector=query_embedding,
+
+            limit=5
+
+        )
+
+        return results
+
+    except Exception:
+
+        return []

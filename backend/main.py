@@ -2,6 +2,8 @@ from fastapi import FastAPI
 
 from app.api.stocks import router as stock_router
 
+from app.services.pipeline import run_full_pipeline
+
 
 app = FastAPI(
 
@@ -35,7 +37,9 @@ def get_stock(symbol: str):
 
 def run_scan():
 
-    return {"status": "scan initiated"}
+    result = run_full_pipeline()
+
+    return result
 
 
 @app.get("/portfolio/current")

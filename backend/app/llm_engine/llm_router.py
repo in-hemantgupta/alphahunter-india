@@ -1,6 +1,4 @@
-from app.llm_engine.groq_client import query_groq
-
-from app.llm_engine.cloudflare_client import query_cloudflare
+from app.core.config import settings
 
 
 class LLMRouter:
@@ -13,22 +11,28 @@ class LLMRouter:
 
     ):
 
+        if not settings.GROQ_API_KEY and not settings.CLOUDFLARE_API_KEY:
+
+            return "LLM not configured"
+
         try:
 
-            return await \
+            from app.llm_engine.groq_client import query_groq
 
-                query_groq(
+            return await query_groq(prompt)
 
-                    prompt
+        except Exception as e:
 
-                )
+            print(f"Groq failed: {e}")
 
-        except:
+            try:
 
-            return await \
+                from app.llm_engine.cloudflare_client import query_cloudflare
 
-                query_cloudflare(
+                return await query_cloudflare(prompt)
 
-                    prompt
+            except Exception as e2:
 
-                )
+                print(f"Cloudflare failed: {e2}")
+
+                return "LLM unavailable"
