@@ -1,3 +1,4 @@
+import pandas as pd
 def observe_market():
 
     unusual = []

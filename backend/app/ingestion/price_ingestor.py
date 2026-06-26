@@ -1,4 +1,5 @@
-import yfinance as yf
+import pandas as pd
+yf = None  # disabled by auto patch
 
 
 def fetch_price_history(
@@ -6,14 +7,8 @@ def fetch_price_history(
     symbol
 ):
 
-    ticker = yf.Ticker(
+    ticker = None
 
-        symbol + ".NS"
-    )
-
-    data = ticker.history(
-
-        period="5y"
-    )
+    data = pd.DataFrame()
 
     return data

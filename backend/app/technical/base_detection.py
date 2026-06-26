@@ -5,7 +5,7 @@ def base_formation_score(price_series):
     score = 0
     if not price_series or len(price_series) == 0:
         return 0
-    volatility = np.std(price_series)
+    volatility = np.std(price_series) if len(price_series) > 1 else 0
     avg_price = np.mean(price_series)
     if avg_price == 0:
         return 0

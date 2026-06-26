@@ -1,3 +1,4 @@
+import pandas as pd
 def rebalance(
 
     current,
@@ -5,8 +6,8 @@ def rebalance(
     new
 ):
 
-    sells = []
+    sells = pd.DataFrame()
 
-    buys = []
+    buys = pd.DataFrame()
 
     return buys, sells

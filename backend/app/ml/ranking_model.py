@@ -1,3 +1,4 @@
+import pandas as pd
 def rank_stocks(model, stocks):
 
     from app.ml.feature_builder import build_features

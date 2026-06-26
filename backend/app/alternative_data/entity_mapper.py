@@ -1,3 +1,4 @@
+import pandas as pd
 THEME_MAPPING = {
 
     "defence":
@@ -28,6 +29,6 @@ def map_theme_to_stocks(theme):
 
         theme,
 
-        []
+        pd.DataFrame()
 
     )

@@ -1,3 +1,4 @@
+import pandas as pd
 def simulate_portfolio(stocks, start, end):
 
     returns = []

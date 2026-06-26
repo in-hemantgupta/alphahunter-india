@@ -1,3 +1,4 @@
+import pandas as pd
 from app.ml.feature_builder import build_features
 
 from app.ml.label_engine import create_label

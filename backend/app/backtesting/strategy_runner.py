@@ -1,3 +1,4 @@
+import pandas as pd
 from app.scoring.alpha_engine import alpha_score
 
 

@@ -1,3 +1,4 @@
+import pandas as pd
 from app.portfolio.risk_engine \
 
     import risk_score

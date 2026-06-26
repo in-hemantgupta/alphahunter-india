@@ -1,3 +1,4 @@
+import pandas as pd
 class BSEIngestor:
 
     def fetch_corporate_filings(
@@ -9,4 +10,4 @@ class BSEIngestor:
 
         # placeholder
 
-        return []
+        return pd.DataFrame()

@@ -1,3 +1,4 @@
+import pandas as pd
 def generate_tasks(sector):
 
     tasks = []

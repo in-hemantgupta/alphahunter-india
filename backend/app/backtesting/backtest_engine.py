@@ -1,3 +1,4 @@
+import pandas as pd
 from app.backtesting.historical_snapshot import load_snapshot
 
 from app.backtesting.strategy_runner import run_strategy

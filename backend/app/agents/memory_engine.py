@@ -1,3 +1,4 @@
+import pandas as pd
 from app.core.config import settings
 
 
@@ -53,7 +54,7 @@ def recall_memory(query_embedding):
 
     if not QDRANT_AVAILABLE:
 
-        return []
+        return pd.DataFrame()
 
     try:
 
@@ -71,4 +72,4 @@ def recall_memory(query_embedding):
 
     except Exception:
 
-        return []
+        return pd.DataFrame()

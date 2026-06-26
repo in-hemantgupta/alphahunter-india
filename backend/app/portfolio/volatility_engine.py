@@ -10,4 +10,8 @@ def annual_volatility(
 
         returns
 
-    ) * np.sqrt(252)
+    ) if len(
+
+        returns
+
+    ) > 1 else 0 * np.sqrt(252)

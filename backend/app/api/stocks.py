@@ -1,3 +1,4 @@
+import pandas as pd
 from fastapi import APIRouter
 
 
@@ -8,4 +9,4 @@ router = APIRouter()
 
 def get_stocks():
 
-    return {"stocks": []}
+    return {"stocks": pd.DataFrame()}
