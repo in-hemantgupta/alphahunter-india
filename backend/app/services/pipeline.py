@@ -1,7 +1,7 @@
 import pandas as pd
 from sqlalchemy.orm import Session
 from datetime import datetime
-yf = None  # disabled by auto patch
+import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.db.database import SessionLocal
@@ -27,9 +27,9 @@ def _ingest_one(symbol: str) -> tuple[str, bool]:
 
 def ingest_stock_prices(symbol: str, session: Session):
     try:
-        ticker = None
-        info = {} or {}
-        hist = pd.DataFrame()
+        ticker = yf.Ticker(f"{symbol}.NS")
+        info = ticker.info or {}
+        hist = ticker.history(period="2y")
 
         if hist.empty:
             return False
@@ -200,7 +200,7 @@ def run_full_pipeline():
         universe = build_stock_universe()
 
         if universe is None or len(universe) == 0:
-            return {"error": "Failed to fetch universe", "stocks": pd.DataFrame()}
+            return {"error": "Failed to fetch universe", "stocks": []}
 
         # ponytail: shuffle to get cross-alphabet coverage, not just A-names
         symbols_to_process = universe.sample(min(500, len(universe)))
@@ -276,7 +276,7 @@ def run_full_pipeline():
         traceback.print_exc()
         print(f"Pipeline error: {e}")
         session.rollback()
-        return {"error": str(e), "stocks": pd.DataFrame()}
+        return {"error": str(e), "stocks": []}
 
     finally:
         session.close()

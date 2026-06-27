@@ -6,8 +6,8 @@ def rebalance(
     new
 ):
 
-    sells = pd.DataFrame()
+    sells = []
 
-    buys = pd.DataFrame()
+    buys = []
 
     return buys, sells

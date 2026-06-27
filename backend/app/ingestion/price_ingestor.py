@@ -1,14 +1,16 @@
-import pandas as pd
-yf = None  # disabled by auto patch
+import yfinance as yf
 
 
-def fetch_price_history(
+def fetch_price_history(symbol):
+    try:
+        ticker = yf.Ticker(f"{symbol}.NS")
+        data = ticker.history(period="2y")
 
-    symbol
-):
+        if data is None or data.empty:
+            return None
 
-    ticker = None
+        return data
 
-    data = pd.DataFrame()
-
-    return data
+    except Exception as e:
+        print(f"Price fetch error {symbol}: {e}")
+        return None

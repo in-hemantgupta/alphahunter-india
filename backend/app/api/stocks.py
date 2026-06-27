@@ -9,4 +9,4 @@ router = APIRouter()
 
 def get_stocks():
 
-    return {"stocks": pd.DataFrame()}
+    return {"stocks": []}
