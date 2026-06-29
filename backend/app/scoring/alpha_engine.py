@@ -62,6 +62,7 @@ def alternative_score(stock):
     hiring = stock.get("hiring_score") or 0
     patent = stock.get("patent_score") or 0
     news = stock.get("news_score") or 0
+    sector_rotation = stock.get("sector_rotation") or 0
 
     score = (
         hiring * 0.20 +
@@ -69,8 +70,8 @@ def alternative_score(stock):
         shipment * 0.15 +
         patent * 0.10 +
         google_trend * 0.10 +
-        news * 0.10 +
-        60 * 0.15
+        sector_rotation * 0.15 +
+        news * 0.10
     )
 
     return min(100, max(0, score))
@@ -83,19 +84,20 @@ def llm_score(stock):
     """
     annual = stock.get("annual_report_score") or 0
     concall = stock.get("concall_score") or 0
-    governance = stock.get("governance_score") or 0
+    sentiment = stock.get("sentiment_score") or 0
     narrative = stock.get("narrative_score") or 0
     risk = stock.get("risk_score") or 0
     mgmt_confidence = stock.get("management_confidence") or 0
+    governance_language = stock.get("governance_language") or 0
 
     score = (
         annual * 0.20 +
         concall * 0.25 +
-        governance * 0.10 +
+        sentiment * 0.10 +
         narrative * 0.15 +
         risk * 0.10 +
         mgmt_confidence * 0.10 +
-        60 * 0.10
+        governance_language * 0.10
     )
 
     return min(100, max(0, score))

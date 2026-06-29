@@ -446,6 +446,56 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         narrative_score = 35
         risk_score = 30
 
+    # Sector rotation: relative outperformance vs benchmark
+    relative_perf = returns_1y - benchmark_return
+    if relative_perf >= 30:
+        sector_rotation = 95
+    elif relative_perf >= 20:
+        sector_rotation = 85
+    elif relative_perf >= 10:
+        sector_rotation = 70
+    elif relative_perf >= 0:
+        sector_rotation = 55
+    elif relative_perf >= -10:
+        sector_rotation = 40
+    else:
+        sector_rotation = 25
+
+    # Sentiment score: promoter confidence + return momentum
+    if promoter_change >= 2 and returns_1y >= 20:
+        sentiment_score = 95
+    elif promoter_change >= 0 and returns_1y >= 10:
+        sentiment_score = 80
+    elif promoter_change >= -2 and returns_1y >= 0:
+        sentiment_score = 65
+    elif promoter_change >= -5:
+        sentiment_score = 45
+    else:
+        sentiment_score = 25
+
+    # Governance language score: governance quality proxy
+    if governance_clean and not auditor_changed and pledge_percent < 2:
+        governance_language = 90
+    elif governance_clean and not auditor_changed:
+        governance_language = 75
+    elif not auditor_changed:
+        governance_language = 55
+    else:
+        governance_language = 30
+
+    # Insider trades: no real data available
+    insider_trades = 0
+
+    # Compensation quality: use margin performance as proxy
+    if margin_expansion >= 100:
+        compensation_quality = 85
+    elif margin_expansion >= 50:
+        compensation_quality = 70
+    elif margin_expansion >= 0:
+        compensation_quality = 55
+    else:
+        compensation_quality = 35
+
     data = {
         "symbol": symbol,
         "company_name": stock.company_name or "",
@@ -515,6 +565,11 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         "narrative_score": narrative_score,
         "risk_score": risk_score,
         "management_confidence": management_confidence,
+        "sector_rotation": sector_rotation,
+        "sentiment_score": sentiment_score,
+        "governance_language": governance_language,
+        "insider_trades": insider_trades,
+        "compensation_quality": compensation_quality,
     }
 
     return data

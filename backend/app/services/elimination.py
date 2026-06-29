@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 from app.models.price_history import PriceHistory
 from app.models.quarterly import QuarterlyFinancials
 from app.models.shareholding import ShareholdingPattern
+from app.scoring.institutional_score import institutional_score
+from app.scoring.alpha_engine import alternative_score, llm_score
 
 
 def stage_1_liquidity_filter(symbol: str, session: Session) -> Tuple[bool, str]:
@@ -94,61 +96,30 @@ def stage_4_forensics_filter(symbol: str, session: Session) -> Tuple[bool, str]:
 
 
 def stage_5_microstructure_filter(symbol: str, session: Session, data: Dict) -> Tuple[bool, str]:
-    delivery_ratio = data.get("delivery_ratio", 0)
-    vwap = data.get("vwap", 0)
-    close = data.get("close", 0)
+    inst_score = institutional_score(data)
 
-    vwap_defense = close > vwap * 0.98 if vwap > 0 else False
-    volume_confirmation = data.get("volume_confirmation", False)
-    compression_pattern = data.get("compression_pattern", False)
-
-    accumulation_signals = sum([
-        delivery_ratio > 1.5,
-        vwap_defense,
-        volume_confirmation,
-        compression_pattern
-    ])
-
-    if accumulation_signals < 1:
-        return False, f"No accumulation evidence (signals: {accumulation_signals})"
+    if inst_score < 40:
+        return False, f"Institutional score {inst_score:.1f} < 40"
 
     return True, "Microstructure OK"
 
 
 def stage_6_alternative_filter(symbol: str, data: Dict) -> Tuple[bool, str]:
-    alternative_signals = [
-        data.get("google_trend_score", 0),
-        data.get("contract_score", 0),
-        data.get("shipment_score", 0),
-        data.get("hiring_score", 0),
-        data.get("patent_score", 0),
-        data.get("news_score", 0)
-    ]
+    alt_score = alternative_score(data)
 
-    active_signals = sum(1 for s in alternative_signals if s > 50)
+    if alt_score < 40:
+        return False, f"Alternative score {alt_score:.1f} < 40"
 
-    if active_signals < 0:
-        return False, "No business momentum evidence"
-
-    return True, "Alternative data OK (no sources yet)"
+    return True, "Alternative data OK"
 
 
 def stage_7_llm_filter(symbol: str, data: Dict) -> Tuple[bool, str]:
-    llm_signals = [
-        data.get("annual_report_score", 0),
-        data.get("concall_score", 0),
-        data.get("governance_score", 0),
-        data.get("narrative_score", 0),
-        data.get("risk_score", 0),
-        data.get("management_confidence", 0)
-    ]
+    l_score = llm_score(data)
 
-    active_signals = sum(1 for s in llm_signals if s > 50)
+    if l_score < 45:
+        return False, f"LLM score {l_score:.1f} < 45"
 
-    if active_signals < 0:
-        return False, "No qualitative confirmation"
-
-    return True, "LLM analysis OK (no sources yet)"
+    return True, "LLM analysis OK"
 
 
 def stage_8_technical_filter(symbol: str, data: Dict) -> Tuple[bool, str]:
