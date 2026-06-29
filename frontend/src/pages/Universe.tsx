@@ -7,11 +7,15 @@ const API_BASE = 'http://localhost:8001'
 interface Stock {
   symbol: string
   company_name: string
-  total_score: number
-  returns_1y: number
-  returns_6m: number
-  volume_ratio: number
+  sector?: string
+  exchange?: string
+  total_score?: number | null
+  returns_1y?: number | null
+  returns_6m?: number | null
+  volume_ratio?: number | null
   current_price?: number
+  passed_elimination?: boolean | null
+  elimination_stages?: string[] | null
 }
 
 export default function Universe() {
@@ -27,8 +31,32 @@ export default function Universe() {
 
   const fetchUniverse = async () => {
     try {
-      const response = await axios.get(`${API_BASE}/stocks`)
-      setStocks(response.data.stocks || [])
+      const [universeRes, scoredRes] = await Promise.all([
+        axios.get(`${API_BASE}/stocks/universe`),
+        axios.get(`${API_BASE}/stocks/scored?limit=2394`)
+      ])
+      const allStocks = universeRes.data.universe || []
+      const scoredStocks = scoredRes.data.stocks || []
+      
+      // Create a map of scored stocks for quick lookup
+      const scoredMap = new Map(scoredStocks.map(s => [s.symbol, s]))
+      
+      // Merge: all stocks with scores where available
+      const merged = allStocks.map((s: any) => {
+        const scored = scoredMap.get(s.symbol)
+        return {
+          ...s,
+          total_score: scored?.total_score ?? null,
+          returns_1y: scored?.returns_1y ?? null,
+          returns_6m: scored?.returns_6m ?? null,
+          volume_ratio: scored?.volume_ratio ?? null,
+          current_price: scored?.current_price ?? null,
+          passed_elimination: scored?.passed_elimination ?? null,
+          elimination_stages: scored?.elimination_stages ?? null
+        }
+      })
+      
+      setStocks(merged)
     } catch (error) {
       console.error('Failed to fetch universe:', error)
     } finally {
@@ -94,30 +122,40 @@ export default function Universe() {
                 <SortHeader label="Symbol" field="symbol" />
                 <SortHeader label="Company" field="company_name" />
                 <SortHeader label="Score" field="total_score" />
+                <SortHeader label="Status" field="passed_elimination" />
                 <SortHeader label="Price" field="current_price" />
                 <SortHeader label="1Y Return" field="returns_1y" />
                 <SortHeader label="6M Return" field="returns_6m" />
                 <SortHeader label="Vol Ratio" field="volume_ratio" />
+                <th className="text-left p-3 text-gray-400">Elimination Reason</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((stock, i) => (
-                <tr key={stock.symbol} className={`border-t border-gray-700 ${i % 2 === 0 ? 'bg-gray-800' : 'bg-gray-750'} hover:bg-gray-600 transition-colors`}>
+                <tr key={stock.symbol} className={`border-t border-gray-700 ${i % 2 === 0 ? 'bg-gray-800' : 'bg-gray-700/50'} hover:bg-gray-600 transition-colors`}>
                   <td className="p-3 font-semibold">{stock.symbol}</td>
                   <td className="p-3 text-gray-400">{stock.company_name}</td>
                   <td className="p-3">
-                    <span className={`font-bold ${stock.total_score >= 60 ? 'text-green-400' : stock.total_score >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>
-                      {stock.total_score.toFixed(1)}
+                    <span className={`font-bold ${(stock.total_score ?? 0) >= 60 ? 'text-green-400' : (stock.total_score ?? 0) >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>
+                      {(stock.total_score ?? 0).toFixed(1)}
+                    </span>
+                  </td>
+                  <td className="p-3">
+                    <span className={`text-sm font-medium ${stock.passed_elimination ? 'text-green-400' : 'text-red-400'}`}>
+                      {stock.passed_elimination ? '✓ Passed' : '✗ Eliminated'}
                     </span>
                   </td>
                   <td className="p-3">{stock.current_price?.toFixed(2) || '-'}</td>
-                  <td className={`p-3 ${stock.returns_1y >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {stock.returns_1y?.toFixed(1)}%
+                  <td className={`p-3 ${(stock.returns_1y ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {(stock.returns_1y ?? 0).toFixed(1)}%
                   </td>
-                  <td className={`p-3 ${stock.returns_6m >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {stock.returns_6m?.toFixed(1)}%
+                  <td className={`p-3 ${(stock.returns_6m ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {(stock.returns_6m ?? 0).toFixed(1)}%
                   </td>
-                  <td className="p-3">{stock.volume_ratio?.toFixed(2)}x</td>
+                  <td className="p-3">{(stock.volume_ratio ?? 0).toFixed(2)}x</td>
+                  <td className="p-3 text-xs text-red-400 max-w-[200px] truncate" title={(!stock.passed_elimination && stock.elimination_stages?.find(s => s.startsWith('FAILED'))?.replace('FAILED: ', '')) || ''}>
+                    {!stock.passed_elimination && stock.elimination_stages?.find(s => s.startsWith('FAILED'))?.replace('FAILED: ', '') || '-'}
+                  </td>
                 </tr>
               ))}
             </tbody>

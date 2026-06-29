@@ -54,7 +54,7 @@ def recall_memory(query_embedding):
 
     if not QDRANT_AVAILABLE:
 
-        return pd.DataFrame()
+        return []
 
     try:
 
@@ -72,4 +72,4 @@ def recall_memory(query_embedding):
 
     except Exception:
 
-        return pd.DataFrame()
+        return []

@@ -39,4 +39,5 @@ class ScoredStock(Base):
     risk_score = Column(Float)
     management_confidence = Column(Float)
     elimination_stages = Column(String)
+    passed_elimination = Column(Boolean, default=False)
     scored_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

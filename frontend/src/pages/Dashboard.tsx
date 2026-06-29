@@ -8,16 +8,18 @@ const API_BASE = 'http://localhost:8001'
 interface Stock {
   symbol: string
   company_name: string
-  total_score: number
-  returns_1y: number
-  returns_6m: number
-  volume_ratio: number
+  total_score?: number | null
+  returns_1y?: number | null
+  returns_6m?: number | null
+  volume_ratio?: number | null
+  passed_elimination?: boolean | null
+  elimination_stages?: string[] | null
 }
 
 export default function Dashboard() {
   const [stocks, setStocks] = useState<Stock[]>([])
   const [loading, setLoading] = useState(false)
-  const [stats, setStats] = useState({ stocks: 0, prices: 0 })
+  const [stats, setStats] = useState({ stocks: 0, prices: 0, passed: 0, eliminated: 0 })
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null)
   const [search, setSearch] = useState('')
 
@@ -28,17 +30,12 @@ export default function Dashboard() {
 
   const fetchStats = async () => {
     try {
-      const [stocksRes, universeRes] = await Promise.all([
-        axios.get(`${API_BASE}/stocks`),
-        axios.get(`${API_BASE}/stocks/universe`)
-      ])
-      setStats({
+      const universeRes = await axios.get(`${API_BASE}/stocks/universe`)
+      setStats(prev => ({
+        ...prev,
         stocks: universeRes.data.total_stocks || 0,
         prices: universeRes.data.total_prices || 0
-      })
-      if (stocksRes.data.stocks?.length > 0) {
-        setStocks(stocksRes.data.stocks)
-      }
+      }))
     } catch (error) {
       console.error('Failed to fetch stats:', error)
     }
@@ -46,9 +43,12 @@ export default function Dashboard() {
 
   const fetchLatestScan = async () => {
     try {
-      const response = await axios.get(`${API_BASE}/stocks`)
+      const response = await axios.get(`${API_BASE}/stocks/scored?limit=2394`)
       if (response.data.stocks?.length > 0) {
         setStocks(response.data.stocks)
+        const passed = response.data.stocks.filter((s: Stock) => s.passed_elimination).length
+        const eliminated = response.data.stocks.length - passed
+        setStats(prev => ({ ...prev, passed, eliminated }))
       }
     } catch (error) {
       console.error('Failed to fetch latest scan:', error)
@@ -60,9 +60,9 @@ export default function Dashboard() {
     try {
       const response = await axios.get(`${API_BASE}/scan/run`)
       const result = response.data
-      if (result.ranked) {
-        setStocks(result.ranked)
-        setStats(prev => ({ ...prev, stocks: result.processed }))
+      if (result.status === 'success') {
+        await fetchLatestScan()
+        setStats(prev => ({ ...prev, stocks: result.processed || prev.stocks }))
       }
     } catch (error) {
       console.error('Scan failed:', error)
@@ -79,11 +79,11 @@ export default function Dashboard() {
   const topStocks = filteredStocks.slice(0, 10)
 
   const scoreDistribution = [
-    { range: '0-20', count: stocks.filter(s => s.total_score < 20).length },
-    { range: '20-40', count: stocks.filter(s => s.total_score >= 20 && s.total_score < 40).length },
-    { range: '40-60', count: stocks.filter(s => s.total_score >= 40 && s.total_score < 60).length },
-    { range: '60-80', count: stocks.filter(s => s.total_score >= 60 && s.total_score < 80).length },
-    { range: '80-100', count: stocks.filter(s => s.total_score >= 80).length },
+    { range: '0-20', count: stocks.filter(s => (s.total_score ?? 0) < 20).length },
+    { range: '20-40', count: stocks.filter(s => (s.total_score ?? 0) >= 20 && (s.total_score ?? 0) < 40).length },
+    { range: '40-60', count: stocks.filter(s => (s.total_score ?? 0) >= 40 && (s.total_score ?? 0) < 60).length },
+    { range: '60-80', count: stocks.filter(s => (s.total_score ?? 0) >= 60 && (s.total_score ?? 0) < 80).length },
+    { range: '80-100', count: stocks.filter(s => (s.total_score ?? 0) >= 80).length },
   ]
 
   const COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#10b981']
@@ -95,7 +95,7 @@ export default function Dashboard() {
         <p className="text-gray-400">Real-time alpha scoring across Indian equities</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
         <div className="bg-gray-800 rounded-lg p-6">
           <div className="flex items-center justify-between">
             <div>
@@ -117,21 +117,28 @@ export default function Dashboard() {
         <div className="bg-gray-800 rounded-lg p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm">Top Score</p>
-              <p className="text-3xl font-bold">{topStocks[0]?.total_score.toFixed(1) || '0'}</p>
+              <p className="text-gray-400 text-sm">Passed Elimination</p>
+              <p className="text-3xl font-bold text-green-400">{stats.passed}</p>
             </div>
-            <TrendingUp className="w-8 h-8 text-purple-500" />
+            <TrendingUp className="w-8 h-8 text-green-500" />
           </div>
         </div>
         <div className="bg-gray-800 rounded-lg p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm">Avg Score</p>
-              <p className="text-3xl font-bold">
-                {stocks.length > 0 ? (stocks.reduce((sum, s) => sum + s.total_score, 0) / stocks.length).toFixed(1) : '0'}
-              </p>
+              <p className="text-gray-400 text-sm">Eliminated</p>
+              <p className="text-3xl font-bold text-red-400">{stats.eliminated}</p>
             </div>
-            <Zap className="w-8 h-8 text-yellow-500" />
+            <Zap className="w-8 h-8 text-red-500" />
+          </div>
+        </div>
+        <div className="bg-gray-800 rounded-lg p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-400 text-sm">Top Score</p>
+              <p className="text-3xl font-bold text-yellow-400">{(topStocks[0]?.total_score ?? 0).toFixed(1)}</p>
+            </div>
+            <TrendingUp className="w-8 h-8 text-yellow-500" />
           </div>
         </div>
       </div>
@@ -177,10 +184,18 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-2xl font-bold text-green-400">{stock.total_score.toFixed(1)}</p>
+                  <p className="text-2xl font-bold text-green-400">{(stock.total_score ?? 0).toFixed(1)}</p>
                   <p className="text-sm text-gray-400">
                     1Y: {stock.returns_1y?.toFixed(1)}% | 6M: {stock.returns_6m?.toFixed(1)}%
                   </p>
+                  <p className={`text-xs ${stock.passed_elimination ? 'text-green-500' : 'text-red-500'}`}>
+                    {stock.passed_elimination ? '✓ Passed' : '✗ Eliminated'}
+                  </p>
+                  {!stock.passed_elimination && stock.elimination_stages && (
+                    <p className="text-xs text-red-400 mt-1 max-w-[200px] truncate" title={stock.elimination_stages.find(s => s.startsWith('FAILED')) || ''}>
+                      {stock.elimination_stages.find(s => s.startsWith('FAILED'))?.replace('FAILED: ', '') || ''}
+                    </p>
+                  )}
                 </div>
               </div>
             ))}
@@ -238,7 +253,7 @@ export default function Dashboard() {
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-gray-700 rounded-lg p-4">
                 <p className="text-gray-400 text-sm">Alpha Score</p>
-                <p className="text-3xl font-bold text-green-400">{selectedStock.total_score.toFixed(1)}</p>
+                <p className="text-3xl font-bold text-green-400">{(selectedStock.total_score ?? 0).toFixed(1)}</p>
               </div>
               <div className="bg-gray-700 rounded-lg p-4">
                 <p className="text-gray-400 text-sm">Volume Ratio</p>

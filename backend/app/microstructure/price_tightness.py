@@ -1,4 +1,4 @@
 def tightness_score(data):
-    if data["atr_14"] < 3 and data["volume_spike"]:
+    if (data.get("atr_14") or 0) < 3 and data.get("volume_spike", False):
         return 100
     return 40

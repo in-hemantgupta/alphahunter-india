@@ -6,7 +6,7 @@ def penalty_engine(data):
 
         penalty += 15
 
-    if data.get("pledge_percent", 0) > 10:
+    if (data.get("pledge_percent") or 0) > 10:
 
         penalty += 35
 
@@ -14,11 +14,11 @@ def penalty_engine(data):
 
         penalty += 40
 
-    if data.get("dilution_rate", 0) > 15:
+    if (data.get("dilution_rate") or 0) > 15:
 
         penalty += 20
 
-    if data.get("cash_conversion", 1) < 0.6:
+    if (data.get("cash_conversion") or 1) < 0.6:
 
         penalty += 25
 

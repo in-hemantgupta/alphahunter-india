@@ -63,7 +63,7 @@ export default function Rebalancing() {
                   <div key={item.symbol} className="flex items-center justify-between p-3 bg-gray-700 rounded-lg">
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-sm font-bold">
-                        {item.weight.toFixed(0)}%
+                        {(item.weight ?? 0).toFixed(0)}%
                       </div>
                       <div>
                         <p className="font-semibold">{item.symbol}</p>
@@ -71,7 +71,7 @@ export default function Rebalancing() {
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-lg font-bold text-green-400">{item.score.toFixed(1)}</p>
+                      <p className="text-lg font-bold text-green-400">{(item.score ?? 0).toFixed(1)}</p>
                       <p className="text-xs text-gray-400">alpha score</p>
                     </div>
                   </div>
@@ -96,8 +96,8 @@ export default function Rebalancing() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rebalances.map((r, i) => (
-                    <tr key={i} className="border-t border-gray-700">
+                  {rebalances.map((r) => (
+                    <tr key={`${r.date}-${r.symbol}`} className="border-t border-gray-700">
                       <td className="p-3">{r.date}</td>
                       <td className="p-3 font-semibold">{r.symbol}</td>
                       <td className="p-3">{r.old_weight?.toFixed(2)}%</td>

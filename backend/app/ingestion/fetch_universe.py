@@ -9,4 +9,4 @@ def build_stock_universe():
         return df
     except Exception as e:
         print(f"Error fetching universe: {e}")
-        return None
+        return pd.DataFrame()

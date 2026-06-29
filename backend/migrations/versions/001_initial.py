@@ -29,7 +29,7 @@ def upgrade() -> None:
     op.create_table(
         'quarterly_financials',
         sa.Column('symbol', sa.String(), primary_key=True),
-        sa.Column('quarter', sa.String()),
+        sa.Column('quarter', sa.String(), primary_key=True),
         sa.Column('revenue', sa.Float()),
         sa.Column('ebitda', sa.Float()),
         sa.Column('pat', sa.Float()),

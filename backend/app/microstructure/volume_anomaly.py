@@ -1,8 +1,8 @@
 def volume_score(data):
-    avg = data["avg_30d_volume"]
+    avg = data.get("avg_30d_volume") or 0
     if avg == 0:
         return 20
-    ratio = data["today_volume"] / avg
+    ratio = (data.get("today_volume") or 0) / avg
     if ratio > 3:
         return 100
     elif ratio > 2:

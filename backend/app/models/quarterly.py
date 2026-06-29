@@ -6,7 +6,7 @@ class QuarterlyFinancials(Base):
     __tablename__ = "quarterly_financials"
 
     symbol = Column(String, primary_key=True)
-    quarter = Column(String)
+    quarter = Column(String, primary_key=True)
     revenue = Column(Float)
     ebitda = Column(Float)
     pat = Column(Float)

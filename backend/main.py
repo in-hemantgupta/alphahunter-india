@@ -76,7 +76,8 @@ def get_scored_stocks_from_db(session, limit=500):
             "narrative_score": s.narrative_score,
             "risk_score": s.risk_score,
             "management_confidence": s.management_confidence,
-            "elimination_stages": s.elimination_stages.split(',') if s.elimination_stages else []
+            "elimination_stages": s.elimination_stages.split(',') if s.elimination_stages else [],
+            "passed_elimination": s.passed_elimination
         })
     return stocks
 

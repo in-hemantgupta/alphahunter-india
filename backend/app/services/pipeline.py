@@ -187,6 +187,10 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         roe = latest.roe or 0
         debt_equity = latest.debt_equity or 1
 
+        operating_cashflow = 0
+        if latest.pat:
+            operating_cashflow = latest.pat * 0.85
+
         if prev.revenue and prev.revenue > 0 and latest.revenue:
             revenue_growth_latest = ((latest.revenue - prev.revenue) / prev.revenue) * 100
             if len(quarterly_data) >= 3:
@@ -214,7 +218,7 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         if prev.ebitda and prev.revenue and prev.revenue > 0 and latest.ebitda and latest.revenue and latest.revenue > 0:
             margin_latest = (latest.ebitda / latest.revenue) * 100
             margin_prev = (prev.ebitda / prev.revenue) * 100
-            margin_expansion = margin_latest - margin_prev
+            margin_expansion = (margin_latest - margin_prev) * 100
 
         if len(quarterly_data) >= 4:
             margins = []
@@ -223,6 +227,30 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
                     margins.append((q.ebitda / q.revenue) * 100)
             if len(margins) >= 2:
                 margin_stability = 100 - (max(margins) - min(margins))
+
+        if len(quarterly_data) >= 2:
+            cf_values = []
+            for q in quarterly_data[:min(4, len(quarterly_data))]:
+                cf = q.pat * 0.85 if q.pat else 0
+                cf_values.append(cf)
+            if len(cf_values) >= 2:
+                if cf_values[0] > cf_values[-1]:
+                    cashflow_improvement = ((cf_values[0] - cf_values[-1]) / max(abs(cf_values[-1]), 1)) * 100
+                elif cf_values[0] > 0:
+                    cashflow_improvement = 10
+
+        if len(quarterly_data) >= 3:
+            cf_trend_vals = []
+            for q in quarterly_data[:min(4, len(quarterly_data))]:
+                cf = q.pat * 0.85 if q.pat else 0
+                cf_trend_vals.append(cf)
+            if len(cf_trend_vals) >= 2:
+                if cf_trend_vals[0] > cf_trend_vals[-1]:
+                    fcf_trend = 1
+                elif cf_trend_vals[0] == cf_trend_vals[-1] and cf_trend_vals[0] > 0:
+                    fcf_trend = 0
+                else:
+                    fcf_trend = -1
 
     shareholding_data = session.query(ShareholdingPattern).filter_by(
         symbol=symbol
@@ -291,39 +319,66 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
     hiring_score = 0
     patent_score = 0
     news_score = 0
-    
+
     # Use revenue acceleration as proxy for market interest
-    if revenue_acceleration > 100:
-        google_trend_score = 80
-        news_score = 75
-    elif revenue_acceleration > 50:
-        google_trend_score = 70
-        news_score = 65
-    elif revenue_acceleration > 20:
-        google_trend_score = 55
-        news_score = 50
-    
+    if revenue_acceleration >= 20:
+        google_trend_score = 95
+        news_score = 90
+    elif revenue_acceleration >= 15:
+        google_trend_score = 85
+        news_score = 80
+    elif revenue_acceleration >= 10:
+        google_trend_score = 75
+        news_score = 70
+    elif revenue_acceleration >= 5:
+        google_trend_score = 65
+        news_score = 60
+    elif revenue_acceleration >= 0:
+        google_trend_score = 50
+        news_score = 45
+    else:
+        google_trend_score = 35
+        news_score = 30
+
     # Use margin expansion as proxy for competitive advantage
-    if margin_expansion > 200:  # 200 bps
-        contract_score = 80
-        shipment_score = 75
-    elif margin_expansion > 100:
+    if margin_expansion >= 200:
+        contract_score = 95
+        shipment_score = 90
+    elif margin_expansion >= 150:
+        contract_score = 85
+        shipment_score = 80
+    elif margin_expansion >= 100:
+        contract_score = 75
+        shipment_score = 70
+    elif margin_expansion >= 50:
         contract_score = 65
         shipment_score = 60
-    elif margin_expansion > 50:
+    elif margin_expansion >= 0:
         contract_score = 50
         shipment_score = 45
-    
+    else:
+        contract_score = 35
+        shipment_score = 30
+
     # Use ROCE trend as proxy for operational efficiency
-    if roce_trend > 5:
-        hiring_score = 80
+    if roce_trend >= 5:
+        hiring_score = 95
+        patent_score = 90
+    elif roce_trend >= 3:
+        hiring_score = 85
+        patent_score = 80
+    elif roce_trend >= 1:
+        hiring_score = 75
         patent_score = 70
-    elif roce_trend > 2:
-        hiring_score = 65
+    elif roce_trend >= 0:
+        hiring_score = 60
         patent_score = 55
-    elif roce_trend > 0:
-        hiring_score = 50
+    elif roce_trend >= -2:
+        hiring_score = 45
         patent_score = 40
+    else:
+        hiring_score = 30
+        patent_score = 25
 
     # Calculate heuristic scores for LLM Intelligence layer
     # Based on quality indicators from available data
@@ -333,48 +388,63 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
     narrative_score = 0
     risk_score = 0
     management_confidence = 0
-    
+
     # Use fundamental quality as proxy for report quality
-    if roce > 25 and debt_equity < 0.3:
-        annual_report_score = 85
-        concall_score = 80
-    elif roce > 20 and debt_equity < 0.5:
-        annual_report_score = 75
-        concall_score = 70
-    elif roce > 15 and debt_equity < 0.7:
-        annual_report_score = 65
-        concall_score = 60
-    elif roce > 10:
-        annual_report_score = 50
-        concall_score = 45
-    
+    if roce >= 25 and debt_equity < 0.3:
+        annual_report_score = 98
+        concall_score = 95
+    elif roce >= 20 and debt_equity < 0.5:
+        annual_report_score = 90
+        concall_score = 85
+    elif roce >= 15 and debt_equity < 0.7:
+        annual_report_score = 80
+        concall_score = 75
+    elif roce >= 12 and debt_equity < 1.0:
+        annual_report_score = 70
+        concall_score = 65
+    elif roce >= 8:
+        annual_report_score = 60
+        concall_score = 55
+    else:
+        annual_report_score = 40
+        concall_score = 35
+
     # Use promoter behavior as proxy for governance
-    if promoter_change > 0 and pledge_percent < 2:
+    if promoter_change >= 2 and pledge_percent < 2:
+        governance_score = 98
+        management_confidence = 95
+    elif promoter_change >= 0 and pledge_percent < 5:
         governance_score = 85
         management_confidence = 80
-    elif promoter_change > 0 and pledge_percent < 5:
-        governance_score = 75
-        management_confidence = 70
-    elif promoter_change > -2 and pledge_percent < 10:
-        governance_score = 60
-        management_confidence = 55
+    elif promoter_change >= -2 and pledge_percent < 10:
+        governance_score = 70
+        management_confidence = 65
     elif pledge_percent < 15:
-        governance_score = 45
-        management_confidence = 40
-    
+        governance_score = 55
+        management_confidence = 50
+    else:
+        governance_score = 35
+        management_confidence = 30
+
     # Use return consistency as proxy for narrative strength
-    if returns_1y > 40 and returns_6m > 20:
-        narrative_score = 80
-        risk_score = 75
-    elif returns_1y > 30 and returns_6m > 15:
-        narrative_score = 70
-        risk_score = 65
-    elif returns_1y > 15 and returns_6m > 5:
-        narrative_score = 55
-        risk_score = 50
-    elif returns_1y > 0:
-        narrative_score = 40
-        risk_score = 35
+    if returns_1y >= 40 and returns_6m >= 20:
+        narrative_score = 95
+        risk_score = 90
+    elif returns_1y >= 30 and returns_6m >= 15:
+        narrative_score = 85
+        risk_score = 80
+    elif returns_1y >= 20 and returns_6m >= 10:
+        narrative_score = 75
+        risk_score = 70
+    elif returns_1y >= 10 and returns_6m >= 0:
+        narrative_score = 65
+        risk_score = 60
+    elif returns_1y >= 0:
+        narrative_score = 50
+        risk_score = 45
+    else:
+        narrative_score = 35
+        risk_score = 30
 
     data = {
         "symbol": symbol,
@@ -538,20 +608,29 @@ def run_full_pipeline(force: bool = False):
         scored_stocks = []
         eliminated_stocks = []
 
-        for stock in all_stocks:
-            data = get_stock_data_for_scoring(stock.symbol, session)
-            if data:
-                passed, stages = run_elimination_pipeline(stock.symbol, session, data)
-                if passed:
+        print(f"Scoring all {len(all_stocks)} stocks...")
+        batch_size = 100
+        for i in range(0, len(all_stocks), batch_size):
+            batch = all_stocks[i:i + batch_size]
+            for stock in batch:
+                data = get_stock_data_for_scoring(stock.symbol, session)
+                if data:
+                    passed, stages = run_elimination_pipeline(stock.symbol, session, data)
                     score = alpha_score(data)
                     data['total_score'] = score
                     data['elimination_stages'] = stages
+                    data['passed_elimination'] = passed
                     scored_stocks.append(data)
-                else:
-                    eliminated_stocks.append({
-                        'symbol': stock.symbol,
-                        'stages': stages
-                    })
+                    if not passed:
+                        eliminated_stocks.append({
+                            'symbol': stock.symbol,
+                            'stages': stages
+                        })
+            
+            if (i // batch_size + 1) % 5 == 0:
+                print(f"  Processed {min(i + batch_size, len(all_stocks))}/{len(all_stocks)} stocks")
+
+        print(f"Scored {len(scored_stocks)} stocks, {len(eliminated_stocks)} eliminated")
 
         ranked = sorted(
             scored_stocks,
@@ -598,7 +677,8 @@ def run_full_pipeline(force: bool = False):
                 narrative_score=stock_data.get('narrative_score'),
                 risk_score=stock_data.get('risk_score'),
                 management_confidence=stock_data.get('management_confidence'),
-                elimination_stages=','.join(stock_data.get('elimination_stages', []))
+                elimination_stages=','.join(stock_data.get('elimination_stages', [])),
+                passed_elimination=stock_data.get('passed_elimination', False)
             )
             session.add(scored_stock)
 

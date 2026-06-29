@@ -1,35 +1,65 @@
 def institutional_score(data):
 
-    score = 0
+    delivery_ratio = data.get("delivery_ratio") or 1
+    volume_ratio = data.get("volume_ratio") or 1
+    volume_high = data.get("volume_high", False)
+    price_flat = data.get("price_flat", False)
+    vwap_defense = data.get("vwap_defense", False)
+    price_compression = data.get("price_compression", False)
+    seller_exhaustion = data.get("seller_exhaustion", False)
+    bulk_deal_positive = data.get("bulk_deal_positive", False)
 
-    delivery_ratio = data.get("delivery_ratio", 1)
+    if delivery_ratio >= 2.5:
+        delivery_score = 100
+    elif delivery_ratio >= 2.0:
+        delivery_score = 90
+    elif delivery_ratio >= 1.5:
+        delivery_score = 75
+    elif delivery_ratio >= 1.2:
+        delivery_score = 60
+    elif delivery_ratio >= 1.0:
+        delivery_score = 45
+    else:
+        delivery_score = 25
 
-    if delivery_ratio > 2.0:
+    if volume_high and price_flat:
+        float_absorption = 90
+    elif volume_high:
+        float_absorption = 65
+    elif price_flat:
+        float_absorption = 55
+    else:
+        float_absorption = 35
 
-        score += 25
+    if volume_ratio >= 4:
+        volume_anomaly = 100
+    elif volume_ratio >= 3:
+        volume_anomaly = 85
+    elif volume_ratio >= 2:
+        volume_anomaly = 70
+    elif volume_ratio >= 1.5:
+        volume_anomaly = 55
+    elif volume_ratio >= 1.0:
+        volume_anomaly = 40
+    else:
+        volume_anomaly = 25
 
-    elif delivery_ratio > 1.5:
+    vwap_score = 80 if vwap_defense else 35
 
-        score += 15
+    compression_score = 80 if price_compression else 35
 
-    if data.get("volume_high", False) and data.get("price_flat", False):
+    exhaustion_score = 80 if seller_exhaustion else 35
 
-        score += 20
+    bulk_score = 90 if bulk_deal_positive else 30
 
-    if data.get("vwap_defense", False):
+    score = (
+        delivery_score * 0.25 +
+        float_absorption * 0.20 +
+        volume_anomaly * 0.15 +
+        vwap_score * 0.15 +
+        compression_score * 0.10 +
+        exhaustion_score * 0.10 +
+        bulk_score * 0.05
+    )
 
-        score += 15
-
-    if data.get("price_compression", False):
-
-        score += 10
-
-    if data.get("seller_exhaustion", False):
-
-        score += 15
-
-    if data.get("bulk_deal_positive", False):
-
-        score += 15
-
-    return score
+    return min(100, max(0, score))

@@ -29,6 +29,6 @@ def map_theme_to_stocks(theme):
 
         theme,
 
-        pd.DataFrame()
+        []
 
     )

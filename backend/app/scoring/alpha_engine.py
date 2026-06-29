@@ -1,46 +1,120 @@
-import pandas as pd
 from app.scoring.fundamental_score import fundamental_score
 from app.scoring.growth_score import growth_score
 from app.scoring.management_score import management_score
+from app.scoring.institutional_score import institutional_score
+from app.scoring.technical_score import technical_score
 from app.scoring.penalty_engine import penalty_engine
-from app.microstructure.microstructure_engine import microstructure_score
-from app.alternative_data.alternative_data_engine import alternative_score
-from app.technical.relative_strength import relative_strength_score
-from app.technical.breakout_detection import breakout_score
-from app.technical.volatility_analysis import volatility_score
-from app.technical.volume_accumulation import volume_accumulation_score
-from app.technical.base_detection import base_formation_score
-
-
-def _compute_technical_score(stock):
-    rs = relative_strength_score(stock.get("stock_return", 0), stock.get("benchmark_return", 0))
-    bo = breakout_score(stock.get("current_price", 0), stock.get("high_52w", 1))
-    vol = volatility_score(stock.get("recent_returns", []))
-    va = volume_accumulation_score(stock.get("volume_20d", 1), stock.get("volume_90d", 1))
-    base = base_formation_score(stock.get("price_series", []))
-    raw = rs + bo + vol + va + base
-    return min(100, raw * 3.3)
 
 
 def alpha_score(stock):
-    fundamental = fundamental_score(stock)
-    growth = growth_score(stock)
-    management = management_score(stock)
-    institutional = microstructure_score(stock)
-    alternative = alternative_score(stock)
-    technical = _compute_technical_score(stock)
-    llm = stock.get("llm_score", 0)
-    penalty = penalty_engine(stock)
+    """
+    FGQMATL Framework - Unified Alpha Score
+    Combines 7 layers as per RESEARCH_BIBLE.md Section 90.
 
-    final = (
-        fundamental * 0.18
-        + growth * 0.20
-        + management * 0.18
-        + institutional * 0.14
-        + alternative * 0.10
-        + technical * 0.08
-        + llm * 0.12
-        - penalty
+    Formula:
+        alpha_score = (
+            fundamental_score * 0.18 +
+            growth_score * 0.20 +
+            management_score * 0.18 +
+            institutional_score * 0.14 +
+            alternative_score * 0.10 +
+            technical_score * 0.08 +
+            llm_score * 0.12
+        )
+
+    Output: 0 -> 100 score
+    """
+    # Calculate individual layer scores
+    f_score = fundamental_score(stock)
+    g_score = growth_score(stock)
+    q_score = management_score(stock)
+    m_score = institutional_score(stock)
+    a_score = alternative_score(stock)
+    t_score = technical_score(stock)
+    l_score = llm_score(stock)
+
+    # Apply FGQMATL weights
+    composite = (
+        f_score * 0.18 +
+        g_score * 0.20 +
+        q_score * 0.18 +
+        m_score * 0.14 +
+        a_score * 0.10 +
+        t_score * 0.08 +
+        l_score * 0.12
     )
 
-    return max(0, min(100, final))
+    # Apply penalties
+    penalty = penalty_engine(stock)
+    final_score = max(0, composite - penalty)
+
+    return min(100, round(final_score, 2))
+
+
+def alternative_score(stock):
+    """
+    Alternative Data Score - Layer 5 of FGQMATL
+    Per RESEARCH_BIBLE.md Section 58.
+    """
+    google_trend = stock.get("google_trend_score") or 0
+    contract = stock.get("contract_score") or 0
+    shipment = stock.get("shipment_score") or 0
+    hiring = stock.get("hiring_score") or 0
+    patent = stock.get("patent_score") or 0
+    news = stock.get("news_score") or 0
+
+    score = (
+        hiring * 0.20 +
+        contract * 0.20 +
+        shipment * 0.15 +
+        patent * 0.10 +
+        google_trend * 0.10 +
+        news * 0.10 +
+        60 * 0.15
+    )
+
+    return min(100, max(0, score))
+
+
+def llm_score(stock):
+    """
+    LLM Intelligence Score - Layer 7 of FGQMATL
+    Per RESEARCH_BIBLE.md Section 75.
+    """
+    annual = stock.get("annual_report_score") or 0
+    concall = stock.get("concall_score") or 0
+    governance = stock.get("governance_score") or 0
+    narrative = stock.get("narrative_score") or 0
+    risk = stock.get("risk_score") or 0
+    mgmt_confidence = stock.get("management_confidence") or 0
+
+    score = (
+        annual * 0.20 +
+        concall * 0.25 +
+        governance * 0.10 +
+        narrative * 0.15 +
+        risk * 0.10 +
+        mgmt_confidence * 0.10 +
+        60 * 0.10
+    )
+
+    return min(100, max(0, score))
+
+
+def get_alpha_decision(score):
+    """
+    Alpha Thresholds as per RESEARCH_BIBLE.md Section 91.
+    Returns decision based on score.
+    """
+    if score < 50:
+        return "REJECT", "Weak opportunity"
+    elif score < 65:
+        return "IGNORE", "Average quality"
+    elif score < 75:
+        return "WATCHLIST", "Interesting candidate"
+    elif score < 85:
+        return "RESEARCH_PRIORITY", "Strong candidate"
+    elif score < 92:
+        return "PORTFOLIO_CANDIDATE", "High conviction hidden alpha"
+    else:
+        return "MAXIMUM_PRIORITY", "Exceptional asymmetric opportunity"

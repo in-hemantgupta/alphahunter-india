@@ -1,10 +1,2 @@
-def stop_loss(
-
-    price,
-
-    atr
-):
-
-    return price -
-
-        (2 * atr)
+def stop_loss(price, atr):
+    return price - (2 * atr)

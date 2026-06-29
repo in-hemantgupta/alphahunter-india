@@ -10,4 +10,4 @@ class BSEIngestor:
 
         # placeholder
 
-        return pd.DataFrame()
+        return []
