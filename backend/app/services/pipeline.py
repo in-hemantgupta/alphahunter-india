@@ -426,6 +426,8 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         governance_score = 35
         management_confidence = 30
 
+    governance_clean = True
+
     # Use return consistency as proxy for narrative strength
     if returns_1y >= 40 and returns_6m >= 20:
         narrative_score = 95
