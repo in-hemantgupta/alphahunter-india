@@ -648,17 +648,23 @@ def run_full_pipeline(force: bool = False):
         financial_ingestor = FinancialIngestor()
         shareholding_ingestor = ShareholdingIngestor()
         financial_count = 0
-        # Ingest financials for all stocks that have price data
+        shareholding_count = 0
+        # Ingest financials only for stocks that need them
+        existing_financials = set(r[0] for r in session.query(QuarterlyFinancials.symbol).distinct().all())
+        existing_shareholding = set(r[0] for r in session.query(ShareholdingPattern.symbol).distinct().all())
         stocks_with_prices = session.query(PriceHistory.symbol).distinct().all()
         stocks_with_prices = [s[0] for s in stocks_with_prices]
-        print(f"Stocks with price data: {len(stocks_with_prices)}")
+        print(f"Stocks with price data: {len(stocks_with_prices)}, need financials: {len(set(stocks_with_prices) - existing_financials)}, need shareholding: {len(set(stocks_with_prices) - existing_shareholding)}")
         for stock in all_stocks:
-            if stock.symbol in stocks_with_prices:
+            if stock.symbol not in stocks_with_prices:
+                continue
+            if stock.symbol not in existing_financials:
                 if financial_ingestor.fetch_quarterly(stock.symbol):
                     financial_count += 1
+            if stock.symbol not in existing_shareholding:
                 if shareholding_ingestor.fetch_shareholding(stock.symbol):
-                    pass
-        print(f"DONE financials: {financial_count} stocks", time.time()-t0)
+                    shareholding_count += 1
+        print(f"DONE financials: {financial_count} new, shareholding: {shareholding_count} new, time:", time.time()-t0)
 
         scored_stocks = []
         eliminated_stocks = []
