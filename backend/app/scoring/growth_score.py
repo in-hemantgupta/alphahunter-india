@@ -1,4 +1,4 @@
-def growth_score(data):
+def growth_score(data, _debug=False):
 
     revenue_accel = data.get("revenue_acceleration") or 0
     pat_accel = data.get("pat_acceleration") or 0
@@ -69,4 +69,17 @@ def growth_score(data):
         cf_score * 0.10
     )
 
-    return min(100, max(0, score))
+    final = min(100, max(0, score))
+
+    if _debug:
+        return final, {
+            "score": final,
+            "components": {
+                "revenue_acceleration": {"raw": revenue_accel, "score": rev_score, "weight": 0.35},
+                "pat_acceleration": {"raw": pat_accel, "score": pat_score, "weight": 0.35},
+                "margin_expansion": {"raw": margin_exp, "score": margin_score, "weight": 0.20},
+                "cashflow_improvement": {"raw": cf_improve, "score": cf_score, "weight": 0.10, "operating_cashflow": operating_cashflow},
+            }
+        }
+
+    return final

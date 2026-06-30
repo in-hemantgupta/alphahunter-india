@@ -10,7 +10,7 @@ from app.models.portfolio_history import PortfolioHistory
 from app.models.scored_stock import ScoredStock
 from app.services.pipeline import run_full_pipeline, get_stock_data_for_scoring
 from app.services.elimination import run_elimination_pipeline
-from app.scoring.alpha_engine import alpha_score
+from app.scoring.alpha_engine import alpha_score, get_score_breakdown
 
 app = FastAPI(title="QuantumAlpha India API")
 
@@ -129,6 +129,24 @@ def get_universe():
             "total_stocks": len(stocks),
             "total_prices": price_count,
         }
+    finally:
+        session.close()
+
+
+@app.get("/stock/{symbol}/breakdown")
+def get_stock_breakdown(symbol: str):
+    session = SessionLocal()
+    try:
+        data = get_stock_data_for_scoring(symbol, session)
+        if not data:
+            return {"symbol": symbol, "error": "No data available"}
+        passed, stages = run_elimination_pipeline(symbol, session, data)
+        breakdown = get_score_breakdown(data)
+        breakdown["passed_elimination"] = passed
+        breakdown["elimination_stages"] = stages
+        breakdown["symbol"] = symbol
+        breakdown["company_name"] = data.get("company_name", "")
+        return breakdown
     finally:
         session.close()
 

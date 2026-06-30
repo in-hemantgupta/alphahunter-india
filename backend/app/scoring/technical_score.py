@@ -1,4 +1,4 @@
-def technical_score(data):
+def technical_score(data, _debug=False):
 
     rs = data.get("relative_strength") or 50
     trend_strength = data.get("trend_strength") or 0
@@ -61,4 +61,18 @@ def technical_score(data):
         vol_score * 0.10
     )
 
-    return min(100, max(0, score))
+    final = min(100, max(0, score))
+
+    if _debug:
+        return final, {
+            "score": final,
+            "components": {
+                "relative_strength": {"raw": rs, "score": rs_score, "weight": 0.30},
+                "trend_strength": {"raw": trend_strength, "score": trend_score, "weight": 0.25},
+                "compression": {"raw": compression_pattern, "score": compression_score, "weight": 0.20},
+                "breakout_probability": {"raw": breakout_prob, "score": breakout_score, "weight": 0.15},
+                "volume_confirmation": {"raw": volume_confirmation, "score": vol_score, "weight": 0.10},
+            }
+        }
+
+    return final

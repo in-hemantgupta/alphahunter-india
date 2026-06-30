@@ -6,25 +6,18 @@ from app.scoring.technical_score import technical_score
 from app.scoring.penalty_engine import penalty_engine
 
 
+LAYER_WEIGHTS = {
+    "fundamental": 0.18,
+    "growth": 0.20,
+    "quality": 0.18,
+    "momentum": 0.14,
+    "alternative": 0.10,
+    "technical": 0.08,
+    "llm": 0.12,
+}
+
+
 def alpha_score(stock):
-    """
-    FGQMATL Framework - Unified Alpha Score
-    Combines 7 layers as per RESEARCH_BIBLE.md Section 90.
-
-    Formula:
-        alpha_score = (
-            fundamental_score * 0.18 +
-            growth_score * 0.20 +
-            management_score * 0.18 +
-            institutional_score * 0.14 +
-            alternative_score * 0.10 +
-            technical_score * 0.08 +
-            llm_score * 0.12
-        )
-
-    Output: 0 -> 100 score
-    """
-    # Calculate individual layer scores
     f_score = fundamental_score(stock)
     g_score = growth_score(stock)
     q_score = management_score(stock)
@@ -33,29 +26,23 @@ def alpha_score(stock):
     t_score = technical_score(stock)
     l_score = llm_score(stock)
 
-    # Apply FGQMATL weights
     composite = (
-        f_score * 0.18 +
-        g_score * 0.20 +
-        q_score * 0.18 +
-        m_score * 0.14 +
-        a_score * 0.10 +
-        t_score * 0.08 +
-        l_score * 0.12
+        f_score * LAYER_WEIGHTS["fundamental"] +
+        g_score * LAYER_WEIGHTS["growth"] +
+        q_score * LAYER_WEIGHTS["quality"] +
+        m_score * LAYER_WEIGHTS["momentum"] +
+        a_score * LAYER_WEIGHTS["alternative"] +
+        t_score * LAYER_WEIGHTS["technical"] +
+        l_score * LAYER_WEIGHTS["llm"]
     )
 
-    # Apply penalties
     penalty = penalty_engine(stock)
     final_score = max(0, composite - penalty)
 
     return min(100, round(final_score, 2))
 
 
-def alternative_score(stock):
-    """
-    Alternative Data Score - Layer 5 of FGQMATL
-    Per RESEARCH_BIBLE.md Section 58.
-    """
+def alternative_score(stock, _debug=False):
     google_trend = stock.get("google_trend_score") or 0
     contract = stock.get("contract_score") or 0
     shipment = stock.get("shipment_score") or 0
@@ -74,14 +61,26 @@ def alternative_score(stock):
         news * 0.10
     )
 
-    return min(100, max(0, score))
+    final = min(100, max(0, score))
+
+    if _debug:
+        return final, {
+            "score": final,
+            "components": {
+                "hiring": {"raw": "", "score": hiring, "weight": 0.20},
+                "government_contracts": {"raw": "", "score": contract, "weight": 0.20},
+                "shipment": {"raw": "", "score": shipment, "weight": 0.15},
+                "patent": {"raw": "", "score": patent, "weight": 0.10},
+                "search_trend": {"raw": "", "score": google_trend, "weight": 0.10},
+                "sector_rotation": {"raw": "", "score": sector_rotation, "weight": 0.15},
+                "news_velocity": {"raw": "", "score": news, "weight": 0.10},
+            }
+        }
+
+    return final
 
 
-def llm_score(stock):
-    """
-    LLM Intelligence Score - Layer 7 of FGQMATL
-    Per RESEARCH_BIBLE.md Section 75.
-    """
+def llm_score(stock, _debug=False):
     annual = stock.get("annual_report_score") or 0
     concall = stock.get("concall_score") or 0
     sentiment = stock.get("sentiment_score") or 0
@@ -100,14 +99,67 @@ def llm_score(stock):
         governance_language * 0.10
     )
 
-    return min(100, max(0, score))
+    final = min(100, max(0, score))
+
+    if _debug:
+        return final, {
+            "score": final,
+            "components": {
+                "annual_report": {"raw": "", "score": annual, "weight": 0.20},
+                "concall_analysis": {"raw": "", "score": concall, "weight": 0.25},
+                "sentiment": {"raw": "", "score": sentiment, "weight": 0.10},
+                "narrative_shift": {"raw": "", "score": narrative, "weight": 0.15},
+                "risk_extraction": {"raw": "", "score": risk, "weight": 0.10},
+                "management_confidence": {"raw": "", "score": mgmt_confidence, "weight": 0.10},
+                "governance_language": {"raw": "", "score": governance_language, "weight": 0.10},
+            }
+        }
+
+    return final
+
+
+def get_score_breakdown(data):
+    layers = {}
+    composite = 0
+
+    for key, weight in LAYER_WEIGHTS.items():
+        if key == "fundamental":
+            score, dbg = fundamental_score(data, _debug=True)
+        elif key == "growth":
+            score, dbg = growth_score(data, _debug=True)
+        elif key == "quality":
+            score, dbg = management_score(data, _debug=True)
+        elif key == "momentum":
+            score, dbg = institutional_score(data, _debug=True)
+        elif key == "alternative":
+            score, dbg = alternative_score(data, _debug=True)
+        elif key == "technical":
+            score, dbg = technical_score(data, _debug=True)
+        elif key == "llm":
+            score, dbg = llm_score(data, _debug=True)
+        else:
+            continue
+
+        layers[key] = {
+            "score": score,
+            "weight": weight,
+            "weighted": round(score * weight, 2),
+            "components": dbg["components"],
+        }
+        composite += score * weight
+
+    penalty = penalty_engine(data)
+    total = max(0, composite - penalty)
+
+    return {
+        "total_score": min(100, round(total, 2)),
+        "composite": round(composite, 2),
+        "penalty": penalty,
+        "layers": layers,
+    }
 
 
 def get_alpha_decision(score):
-    """
-    Alpha Thresholds as per RESEARCH_BIBLE.md Section 91.
-    Returns decision based on score.
-    """
     if score < 50:
         return "REJECT", "Weak opportunity"
     elif score < 65:

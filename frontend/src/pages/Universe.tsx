@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Search } from 'lucide-react'
 import axios from 'axios'
+import StockBreakdownModal from '../components/StockBreakdownModal'
 
 const API_BASE = 'http://localhost:8001'
 
@@ -24,6 +25,7 @@ export default function Universe() {
   const [loading, setLoading] = useState(true)
   const [sortKey, setSortKey] = useState<keyof Stock>('total_score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
   useEffect(() => {
     fetchUniverse()
@@ -132,7 +134,7 @@ export default function Universe() {
             </thead>
             <tbody>
               {filtered.map((stock, i) => (
-                <tr key={stock.symbol} className={`border-t border-gray-700 ${i % 2 === 0 ? 'bg-gray-800' : 'bg-gray-700/50'} hover:bg-gray-600 transition-colors`}>
+                <tr key={stock.symbol} onClick={() => setSelectedSymbol(stock.symbol)} className={`border-t border-gray-700 ${i % 2 === 0 ? 'bg-gray-800' : 'bg-gray-700/50'} hover:bg-gray-600 transition-colors cursor-pointer`}>
                   <td className="p-3 font-semibold">{stock.symbol}</td>
                   <td className="p-3 text-gray-400">{stock.company_name}</td>
                   <td className="p-3">
@@ -164,6 +166,13 @@ export default function Universe() {
             <p className="text-center text-gray-400 py-8">No stocks match your filter</p>
           )}
         </div>
+      )}
+    </div>
+      {selectedSymbol && (
+        <StockBreakdownModal
+          symbol={selectedSymbol}
+          onClose={() => setSelectedSymbol(null)}
+        />
       )}
     </div>
   )

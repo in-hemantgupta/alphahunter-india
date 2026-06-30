@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
 import { TrendingUp, Activity, Database, Zap, RefreshCw, Search } from 'lucide-react'
 import axios from 'axios'
+import StockBreakdownModal from '../components/StockBreakdownModal'
 
 const API_BASE = 'http://localhost:8001'
 
@@ -241,35 +242,10 @@ export default function Dashboard() {
       </div>
 
       {selectedStock && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-gray-800 rounded-lg p-8 max-w-2xl w-full">
-            <div className="flex justify-between items-start mb-6">
-              <div>
-                <h3 className="text-3xl font-bold">{selectedStock.symbol}</h3>
-                <p className="text-gray-400">{selectedStock.company_name}</p>
-              </div>
-              <button onClick={() => setSelectedStock(null)} className="text-gray-400 hover:text-white text-2xl">×</button>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-700 rounded-lg p-4">
-                <p className="text-gray-400 text-sm">Alpha Score</p>
-                <p className="text-3xl font-bold text-green-400">{(selectedStock.total_score ?? 0).toFixed(1)}</p>
-              </div>
-              <div className="bg-gray-700 rounded-lg p-4">
-                <p className="text-gray-400 text-sm">Volume Ratio</p>
-                <p className="text-3xl font-bold">{selectedStock.volume_ratio?.toFixed(2)}x</p>
-              </div>
-              <div className="bg-gray-700 rounded-lg p-4">
-                <p className="text-gray-400 text-sm">1 Year Return</p>
-                <p className="text-3xl font-bold text-blue-400">{selectedStock.returns_1y?.toFixed(1)}%</p>
-              </div>
-              <div className="bg-gray-700 rounded-lg p-4">
-                <p className="text-gray-400 text-sm">6 Month Return</p>
-                <p className="text-3xl font-bold text-purple-400">{selectedStock.returns_6m?.toFixed(1)}%</p>
-              </div>
-            </div>
-          </div>
-        </div>
+        <StockBreakdownModal
+          symbol={selectedStock.symbol}
+          onClose={() => setSelectedStock(null)}
+        />
       )}
     </div>
   )

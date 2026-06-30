@@ -1,4 +1,4 @@
-def fundamental_score(data):
+def fundamental_score(data, _debug=False):
 
     roce = data.get("roce") or 0
     debt_equity = data.get("debt_equity") or 1
@@ -58,4 +58,18 @@ def fundamental_score(data):
         asset_turnover_score * 0.15
     )
 
-    return min(100, max(0, score))
+    final = min(100, max(0, score))
+
+    if _debug:
+        return final, {
+            "score": final,
+            "components": {
+                "roce": {"raw": roce, "score": roce_score, "weight": 0.30},
+                "debt_equity": {"raw": debt_equity, "score": debt_score, "weight": 0.20},
+                "cashflow": {"raw": operating_cashflow, "score": fcf_score, "weight": 0.20, "fcf_trend": fcf_trend},
+                "margin_stability": {"raw": margin_stability, "score": stability, "weight": 0.15},
+                "asset_turnover": {"raw": revenue, "score": asset_turnover_score, "weight": 0.15},
+            }
+        }
+
+    return final

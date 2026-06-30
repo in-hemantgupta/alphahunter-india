@@ -1,4 +1,4 @@
-def management_score(data):
+def management_score(data, _debug=False):
 
     promoter_change = data.get("promoter_change") or 0
     pledge_percent = data.get("pledge_percent") or 0
@@ -72,4 +72,20 @@ def management_score(data):
         compensation_quality * 0.10
     )
 
-    return min(100, max(0, score))
+    final = min(100, max(0, score))
+
+    if _debug:
+        return final, {
+            "score": final,
+            "components": {
+                "promoter_behavior": {"raw": promoter_change, "score": promoter_score, "weight": 0.20},
+                "capital_allocation": {"raw": roce_trend, "score": capital_score, "weight": 0.20},
+                "governance": {"raw": governance_clean, "score": governance_score, "weight": 0.15},
+                "cashflow_quality": {"raw": operating_cashflow, "score": cashflow_quality, "weight": 0.15},
+                "insider_behavior": {"raw": insider_trades, "score": insider_behavior, "weight": 0.10, "pledge_percent": pledge_percent},
+                "dilution": {"raw": dilution_rate, "score": dilution_score, "weight": 0.10},
+                "compensation_quality": {"raw": "", "score": compensation_quality, "weight": 0.10},
+            }
+        }
+
+    return final
