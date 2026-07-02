@@ -1,4 +1,13 @@
+import math
+
+
 def value_score(data, ranker=None, _debug=False):
+    """Rule 1/5: pb_ratio/ev_ebitda/dividend_yield are not currently computed
+    anywhere in pipeline.py (always None) - they used to fall through to a
+    hardcoded 50/50/30 "neutral" score on every single stock, which is a
+    constant baseline number pretending to be a real reading, diluting the
+    real pe_ratio/size signal. Missing components are excluded and the
+    remaining weights renormalize instead."""
     pe = data.get("pe_ratio")
     pb = data.get("pb_ratio")
     ev_ebitda = data.get("ev_ebitda")
@@ -11,36 +20,32 @@ def value_score(data, ranker=None, _debug=False):
     if eps is not None and eps > 0 and current_price is not None:
         computed_pe = current_price / eps
 
-    pe_use = pe or computed_pe
+    pe_use = pe if pe is not None else computed_pe
 
-    if ranker:
-        pe_score = ranker.inverse_pct("pe_ratio", min(pe_use, 100)) if pe_use else 50
-        pb_score = ranker.inverse_pct("pb_ratio", min(pb, 20)) if pb else 50
-        ev_score = ranker.inverse_pct("ev_ebitda", min(ev_ebitda, 50)) if ev_ebitda else 50
-    else:
-        pe_score = max(0, 100 - (pe_use or 20) * 2) if pe_use else 50
-        pb_score = max(0, 100 - (pb or 3) * 10) if pb else 50
-        ev_score = max(0, 100 - (ev_ebitda or 15) * 3) if ev_ebitda else 50
-    dy_score = min(100, (dividend_yield or 0) * 20) if dividend_yield else 30
+    components = {}  # name -> (score, weight, raw)
 
-    size_factor = None
-    if market_cap and market_cap > 0:
-        import math
+    if pe_use is not None and pe_use > 0:
+        s = ranker.inverse_pct("pe_ratio", min(pe_use, 100)) if ranker else max(0, 100 - pe_use * 2)
+        components["pe_ratio"] = (s, 0.25, pe_use)
+
+    if pb is not None and pb > 0:
+        s = ranker.inverse_pct("pb_ratio", min(pb, 20)) if ranker else max(0, 100 - pb * 10)
+        components["pb_ratio"] = (s, 0.20, pb)
+
+    if ev_ebitda is not None and ev_ebitda > 0:
+        s = ranker.inverse_pct("ev_ebitda", min(ev_ebitda, 50)) if ranker else max(0, 100 - ev_ebitda * 3)
+        components["ev_ebitda"] = (s, 0.20, ev_ebitda)
+
+    if dividend_yield is not None:
+        components["dividend_yield"] = (min(100, dividend_yield * 20), 0.10, dividend_yield)
+
+    if market_cap is not None and market_cap > 0:
         size_factor = -math.log(market_cap)
+        s = ranker.pct("size_factor", size_factor) if ranker else min(100, max(0, 50 + (30 - math.log(market_cap)) * 15))
+        components["size_premium"] = (s, 0.25, market_cap)
 
-    size_score = 50
-    if size_factor is not None and ranker:
-        size_score = ranker.pct("size_factor", size_factor)
-    elif size_factor is not None:
-        size_score = min(100, max(0, 50 + (30 - math.log(market_cap)) * 15))
-
-    score = (
-        pe_score * 0.25 +
-        pb_score * 0.20 +
-        ev_score * 0.20 +
-        dy_score * 0.10 +
-        size_score * 0.25
-    )
+    total_weight = sum(w for _, w, _ in components.values())
+    score = sum(s * w for s, w, _ in components.values()) / total_weight if total_weight > 0 else 50
 
     final = min(100, max(0, score))
 
@@ -48,12 +53,9 @@ def value_score(data, ranker=None, _debug=False):
         return final, {
             "score": final,
             "components": {
-                "pe_ratio": {"raw": pe_use, "score": pe_score, "weight": 0.25},
-                "pb_ratio": {"raw": pb, "score": pb_score, "weight": 0.20},
-                "ev_ebitda": {"raw": ev_ebitda, "score": ev_score, "weight": 0.20},
-                "dividend_yield": {"raw": dividend_yield, "score": dy_score, "weight": 0.10},
-                "size_premium": {"raw": market_cap, "score": size_score, "weight": 0.25},
-            }
+                name: {"raw": raw, "score": s, "weight": w}
+                for name, (s, w, raw) in components.items()
+            },
         }
 
     return final

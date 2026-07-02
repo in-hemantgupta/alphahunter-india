@@ -33,3 +33,7 @@ class QuarterlyFinancials(Base):
     raw_material_cost = Column(Float)
     cash_equivalents = Column(Float)
     capex = Column(Float)
+    # Phase 2 Task 4/5: which fallback tier actually supplied this row, and
+    # how much it should be trusted (see app/services/source_confidence.py)
+    source = Column(String, nullable=True)
+    confidence = Column(Float, nullable=True)

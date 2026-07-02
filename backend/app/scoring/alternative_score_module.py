@@ -1,22 +1,15 @@
 def alternative_score(data, ranker=None, _debug=False):
-    news = data.get("news_score") or 0
-    sector_rotation = data.get("sector_rotation") or 50
-    contract = data.get("contract_score") or 0
-    hiring = data.get("hiring_score") or 0
-    patent = data.get("patent_score") or 0
-    shipment = data.get("shipment_score") or 0
-    insider = data.get("insider_trades") or 0
-    compensation = data.get("compensation_quality") or 0
-
-    news_score_val = max(0, min(100, news))
-    sr_score = max(0, min(100, sector_rotation))
-    contract_score_val = max(0, min(100, contract))
-    hiring_score_val = max(0, min(100, hiring))
-    patent_score_val = max(0, min(100, patent))
-    shipment_score_val = max(0, min(100, shipment))
-    insider_score = max(0, min(100, 50 + insider * 10))
-    comp_score = max(0, min(100, compensation))
-
+    """Rule 1/5: insider_trades is real (Phase 2 Task 3, SEBI PIT disclosures
+    via app/ingestion/nse_insider_pit.py) but still None for symbols with no
+    filings in the trailing window - that's an honest "no signal", not
+    missing wiring. compensation_quality has no data source anywhere in the
+    system. news/contract/hiring/patent/shipment only exist once the
+    alt-data pipeline has run for a stock - `x or 0` used to fold all of
+    these into the weighted average as fabricated zeros. Missing components
+    are excluded and remaining weights renormalize. Called from
+    elimination.py's stage_6, which already skips this entirely when zero
+    alt-data fields are present - this handles the partial-coverage case
+    the same way."""
     weights = {
         "news_sentiment": 0.25,
         "sector_rotation": 0.20,
@@ -28,16 +21,26 @@ def alternative_score(data, ranker=None, _debug=False):
         "management_quality": 0.05,
     }
 
-    score = (
-        news_score_val * weights["news_sentiment"] +
-        sr_score * weights["sector_rotation"] +
-        insider_score * weights["insider_activity"] +
-        contract_score_val * weights["contract_wins"] +
-        hiring_score_val * weights["hiring_intensity"] +
-        patent_score_val * weights["patent_activity"] +
-        shipment_score_val * weights["shipment_trends"] +
-        comp_score * weights["management_quality"]
-    )
+    raw = {
+        "news_sentiment": data.get("news_score"),
+        "sector_rotation": data.get("sector_rotation"),
+        "insider_activity": data.get("insider_trades"),
+        "contract_wins": data.get("contract_score"),
+        "hiring_intensity": data.get("hiring_score"),
+        "patent_activity": data.get("patent_score"),
+        "shipment_trends": data.get("shipment_score"),
+        "management_quality": data.get("compensation_quality"),
+    }
+
+    components = {}
+    for name, val in raw.items():
+        if val is None:
+            continue
+        s = max(0, min(100, 50 + val * 10)) if name == "insider_activity" else max(0, min(100, val))
+        components[name] = (s, weights[name], val)
+
+    total_weight = sum(w for _, w, _ in components.values())
+    score = sum(s * w for s, w, _ in components.values()) / total_weight if total_weight > 0 else 50
 
     final = min(100, max(0, score))
 
@@ -45,15 +48,9 @@ def alternative_score(data, ranker=None, _debug=False):
         return final, {
             "score": final,
             "components": {
-                "news_sentiment": {"raw": news, "score": news_score_val, "weight": weights["news_sentiment"]},
-                "sector_rotation": {"raw": sector_rotation, "score": sr_score, "weight": weights["sector_rotation"]},
-                "insider_activity": {"raw": insider, "score": insider_score, "weight": weights["insider_activity"]},
-                "contract_wins": {"raw": contract, "score": contract_score_val, "weight": weights["contract_wins"]},
-                "hiring_intensity": {"raw": hiring, "score": hiring_score_val, "weight": weights["hiring_intensity"]},
-                "patent_activity": {"raw": patent, "score": patent_score_val, "weight": weights["patent_activity"]},
-                "shipment_trends": {"raw": shipment, "score": shipment_score_val, "weight": weights["shipment_trends"]},
-                "management_quality": {"raw": compensation, "score": comp_score, "weight": weights["management_quality"]},
-            }
+                name: {"raw": raw, "score": s, "weight": w}
+                for name, (s, w, raw) in components.items()
+            },
         }
 
     return final

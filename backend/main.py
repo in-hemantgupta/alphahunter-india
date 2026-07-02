@@ -13,6 +13,9 @@ from app.services.elimination import run_elimination_pipeline
 from app.scoring.alpha_engine import alpha_score, get_score_breakdown
 from app.ingestion.alternative_ingestor import enrich_hiring_async, enrich_news
 from app.ingestion.llm_enricher import run_llm_enrichment
+from app.ingestion.nse_bhavcopy import ingest_delivery_pct
+from app.ingestion.bse_scrip_master import ingest_scrip_master
+from app.ingestion.bse_announcements import ingest_announcements as ingest_bse_announcements
 
 app = FastAPI(title="QuantumAlpha India API")
 
@@ -201,6 +204,45 @@ def enrich_news_endpoint(limit: int = 2395):
         session.close()
 
 
+@app.post("/enrich/delivery")
+def enrich_delivery_endpoint(trading_date: str):
+    """Ingest NSE bhavcopy delivery% for one trading date (YYYY-MM-DD).
+    One bhavcopy file covers the whole universe - call once per date, not
+    once per symbol. nsearchives rate-limits bursts; don't loop this tightly."""
+    from datetime import datetime as _dt
+    d = _dt.strptime(trading_date, "%Y-%m-%d").date()
+    session = SessionLocal()
+    try:
+        updated = ingest_delivery_pct(session, d)
+        return {"status": "ok", "trading_date": trading_date, "rows_updated": updated}
+    finally:
+        session.close()
+
+
+@app.post("/enrich/bse-scrip-master")
+def enrich_bse_scrip_master_endpoint():
+    """Task 2/4: refresh the NSE-symbol <-> BSE-code <-> ISIN mapping (~4900
+    scrips, one bulk call)."""
+    session = SessionLocal()
+    try:
+        updated = ingest_scrip_master(session)
+        return {"status": "ok", "rows_updated": updated}
+    finally:
+        session.close()
+
+
+@app.post("/enrich/bse-announcements")
+def enrich_bse_announcements_endpoint(symbol: str, category: str = "-1"):
+    """Task 2: BSE corporate announcements for one symbol. Requires
+    /enrich/bse-scrip-master to have run at least once."""
+    session = SessionLocal()
+    try:
+        new = ingest_bse_announcements(session, symbol, category=category)
+        return {"status": "ok", "symbol": symbol, "new_filings": new}
+    finally:
+        session.close()
+
+
 @app.post("/enrich/llm")
 async def enrich_llm_endpoint(limit: int = 200):
     """Enrich top N stocks with LLM analysis via Groq."""
@@ -233,6 +275,17 @@ async def enrich_llm_symbols_endpoint(req: LLMEnrichRequest):
 @app.get("/scan/run")
 def run_scan(force: bool = False):
     return run_full_pipeline(force=force)
+
+
+@app.get("/data/source-health")
+def data_source_health():
+    """Task 7: status/latency/failure-rate/retry-count/last-fetch/uptime per source."""
+    from app.services.data_freshness import DataFreshnessMonitor
+    monitor = DataFreshnessMonitor()
+    try:
+        return {"sources": monitor.get_all_source_health()}
+    finally:
+        monitor.close()
 
 
 @app.get("/scan/status")
@@ -301,14 +354,21 @@ def get_rebalancing():
         session.close()
 
 
-@app.get("/agents/status")
-def agents_status():
-    return {"agents": "operational"}
-
-
 @app.get("/ml/predictions")
 def ml_predictions():
-    return {"predictions": []}
+    # Rule 1: query the real table instead of hardcoding [] - it's empty
+    # today because nothing populates MLPrediction yet, not because the
+    # endpoint is faking an empty result.
+    from app.models.ml_predictions import MLPrediction
+    session = SessionLocal()
+    try:
+        rows = session.query(MLPrediction).order_by(MLPrediction.date.desc()).limit(100).all()
+        return {"predictions": [
+            {"symbol": r.symbol, "date": str(r.date), "probability": r.probability, "confidence": r.confidence}
+            for r in rows
+        ]}
+    finally:
+        session.close()
 
 
 @app.get("/signals/latest")

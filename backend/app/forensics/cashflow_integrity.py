@@ -3,7 +3,9 @@ def cashflow_integrity_score(data):
     Cash Flow Integrity Engine
     As per RESEARCH_BIBLE.md Section 23.
     """
-    cash_conversion = (data.get("cash_conversion") or 1)
+    cash_conversion = data.get("cash_conversion")
+    if cash_conversion is None:
+        return None  # Rule 1: no OCF/PAT data -> exclude, don't assume clean conversion
 
     if cash_conversion >= 0.8:
         return 100

@@ -10,6 +10,12 @@ SOURCES = [
     "nse_financial",
     "bse_pdf",
     "screener_in",
+    "nse_shareholding_filing",
+    "nse_bhavcopy",
+    "nse_corp_announcements",
+    "bse_corp_announcements",
+    "sebi_pit_disclosure",
+    "bse_scrip_master",
 ]
 
 
@@ -47,12 +53,17 @@ class DataFreshnessMonitor:
                 self.session.add(record)
         self.session.commit()
 
-    def record_success(self, source_name):
+    def record_success(self, source_name, latency_ms=None):
         record = self.session.query(DataSourceHealth).filter_by(source_name=source_name).first()
         if record:
             record.last_successful_fetch = datetime.now()
             record.consecutive_failures = 0
             record.last_error = None
+            record.total_requests = (record.total_requests or 0) + 1
+            if latency_ms is not None:
+                prior = record.avg_latency_ms
+                n = record.total_requests
+                record.avg_latency_ms = latency_ms if prior is None else prior + (latency_ms - prior) / n
             record.health_score = self.compute_health_score(source_name)
             self.session.commit()
 
@@ -62,6 +73,7 @@ class DataFreshnessMonitor:
             record.last_failed_attempt = datetime.now()
             record.consecutive_failures = (record.consecutive_failures or 0) + 1
             record.total_failures = (record.total_failures or 0) + 1
+            record.total_requests = (record.total_requests or 0) + 1
             record.last_error = str(error_msg)[:500]
             record.health_score = self.compute_health_score(source_name)
             self.session.commit()
@@ -91,12 +103,17 @@ class DataFreshnessMonitor:
         result = []
         for r in records:
             stale_info = self.check_stale(r.source_name)
+            total = r.total_requests or 0
+            uptime_pct = round((total - (r.total_failures or 0)) / total * 100, 1) if total > 0 else None
             result.append({
                 "source_name": r.source_name,
                 "last_successful_fetch": r.last_successful_fetch,
                 "last_failed_attempt": r.last_failed_attempt,
                 "consecutive_failures": r.consecutive_failures,
                 "total_failures": r.total_failures,
+                "total_requests": total,
+                "uptime_pct": uptime_pct,
+                "avg_latency_ms": round(r.avg_latency_ms, 1) if r.avg_latency_ms is not None else None,
                 "health_score": r.health_score,
                 "is_stale": stale_info["is_stale"],
                 "stale_hours": stale_info["stale_hours"],

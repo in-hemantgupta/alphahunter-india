@@ -43,6 +43,30 @@ session.close()
 
 print(f"Stocks: {len(stocks)}, Sectors: {len(set(sectors.values()))}")
 
+_delisted_count = sum(1 for s in stocks.values() if s.status != "active")
+print(
+    f"Survivorship-bias status: {_delisted_count}/{len(stocks)} tracked stocks are non-active. "
+    "Point-in-time inclusion below is wired against stocks_master.status/listing_date/delisting_date, "
+    "but the historical delisted/suspended universe itself has not been backfilled yet - Rule 4 is only "
+    "mechanically satisfied once that backfill lands (see docs/INSTITUTIONAL_REBUILD_PLAN.md Phase 2/6). "
+    "Treat CAGR/Sharpe below as upper-bound estimates until then, not final numbers."
+)
+
+
+def _active_as_of(symbol, as_of_date):
+    """Point-in-time universe membership: was this stock actually tradeable
+    on as_of_date? Currently a no-op for every row (all stocks are
+    status='active' with no listing/delisting dates - see disclaimer above)
+    but the machinery is correct for when that data exists."""
+    stock = stocks.get(symbol)
+    if not stock:
+        return False
+    if stock.listing_date and stock.listing_date > as_of_date:
+        return False
+    if stock.status != "active" and stock.delisting_date and stock.delisting_date < as_of_date:
+        return False
+    return True
+
 
 def get_future_return(symbol, as_of, trading_days):
     prices = price_map.get(symbol, [])
@@ -87,6 +111,8 @@ for m_idx, as_of in enumerate(backtest_dates):
     # Build candidate data
     candidates = []
     for s in snaps:
+        if not _active_as_of(s.symbol, as_of):
+            continue
         sector = sectors.get(s.symbol, "Unknown")
         pv_list = get_prices_up_to(s.symbol, as_of)
         if len(pv_list) < 50:

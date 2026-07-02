@@ -1,13 +1,23 @@
 def technical_score(data, ranker=None, _debug=False):
-    rs = data.get("relative_strength") or 50
-    trend_strength = data.get("trend_strength") or 0
+    """relative_strength/trend_strength/returns_1y are deterministically
+    derived from price data in pipeline.py whenever prices exist (never
+    actually None here) - but a legitimate 0 (e.g. a stock down 100%) must
+    not get silently replaced by a neutral default via `x or default`.
+    compression_pattern/volume_confirmation/vwap_defense/breakout_probability
+    are likewise always computed, so a plain .get() default is fine there."""
+    rs = data.get("relative_strength")
+    rs = rs if rs is not None else 50
+    trend_strength = data.get("trend_strength")
+    trend_strength = trend_strength if trend_strength is not None else 0
     compression_pattern = data.get("compression_pattern", False)
-    breakout_prob = data.get("breakout_probability") or 0.3
+    breakout_prob = data.get("breakout_probability")
+    breakout_prob = breakout_prob if breakout_prob is not None else 0.3
     volume_confirmation = data.get("volume_confirmation", False)
     vwap_defense = data.get("vwap_defense", False)
 
     # Merged momentum: 12-month return excluding last month
-    returns_1y = data.get("returns_1y") or 0
+    returns_1y = data.get("returns_1y")
+    returns_1y = returns_1y if returns_1y is not None else 0
     recent_returns = data.get("recent_returns")
     mom_12m_1m = returns_1y
     if recent_returns and len(recent_returns) >= 22:

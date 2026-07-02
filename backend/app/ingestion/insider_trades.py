@@ -1,9 +1,10 @@
 """Insider trading data ingestion.
 
 Sources (priority order):
-1. SEBI Disclosures portal
-2. BSE Announcements
-3. NSE Corporate Announcements
+1. NSE corporates-pit (real SEBI Regulation 7(2) disclosures, structured -
+   see app/ingestion/nse_insider_pit.py)
+2. BSE Announcements (regex fallback, lower confidence - only fills gaps
+   the structured feed above doesn't cover)
 
 Each source has its own circuit breaker flag.
 """
@@ -22,8 +23,20 @@ class InsiderTradesIngestor:
 
     def ingest_all(self) -> int:
         total = 0
+        total += self._from_nse_pit()
         total += self._from_bse_announcements()
         return total
+
+    def _from_nse_pit(self) -> int:
+        from app.ingestion.nse_insider_pit import ingest_pit_disclosures
+        session = SessionLocal()
+        try:
+            return ingest_pit_disclosures(session)
+        except Exception as e:
+            print(f"NSE PIT ingestion failed: {e}")
+            return 0
+        finally:
+            session.close()
 
     def _from_bse_announcements(self) -> int:
         """Scrape BSE announcements for insider trading disclosures."""

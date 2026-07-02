@@ -15,5 +15,7 @@ class DataSourceHealth(Base):
     health_score = Column(Float, default=1.0)
     is_stale = Column(Boolean, default=False)
     last_error = Column(Text, nullable=True)
+    avg_latency_ms = Column(Float, nullable=True)
+    total_requests = Column(Integer, default=0)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())

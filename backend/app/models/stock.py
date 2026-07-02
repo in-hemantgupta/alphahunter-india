@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, BigInteger
+from sqlalchemy import Column, String, Integer, BigInteger, Date
 from app.db.base import Base
 
 
@@ -11,3 +11,10 @@ class Stock(Base):
     exchange = Column(String)
     isin = Column(String)
     market_cap = Column(BigInteger)
+
+    # Survivorship-bias fix (Rule 4): backtests and universe queries must be
+    # able to tell active stocks from delisted/suspended ones instead of only
+    # ever seeing today's live universe.
+    status = Column(String, nullable=False, server_default="active")  # active | delisted | suspended
+    listing_date = Column(Date, nullable=True)
+    delisting_date = Column(Date, nullable=True)

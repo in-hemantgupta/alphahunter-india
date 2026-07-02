@@ -1,7 +1,6 @@
 def lowvol_score(data, ranker=None, _debug=False):
     beta = data.get("beta")
     atr_14 = data.get("atr_14")
-    returns_1y = data.get("returns_1y") or 0
     current_price = data.get("current_price")
     high_52w = data.get("high_52w")
 

@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 from app.db.database import SessionLocal
 from app.models.quarterly import QuarterlyFinancials
 from app.ingestion.screener_scraper import scrape_screener
+from app.services.source_confidence import confidence_for
 
 
 class FinancialIngestor:
@@ -76,6 +77,8 @@ class FinancialIngestor:
                     raw_material_cost=self._screener_val(pl, qi, "raw_material_cost"),
                     cash_equivalents=self._screener_val(bs, qi, "cash_equivalents"),
                     capex=self._screener_val(cf, qi, "capex"),
+                    source="screener_in",
+                    confidence=confidence_for("screener_in"),
                 )
                 # Compute EBITDA if not directly available
                 rev = record.revenue
@@ -125,6 +128,8 @@ class FinancialIngestor:
                         val = row.get(field)
                         if val is not None:
                             setattr(qf, field, val)
+                    qf.source = "yfinance_financials"
+                    qf.confidence = confidence_for("yfinance_financials")
                     if not existing:
                         session.add(qf)
                 session.commit()
@@ -165,6 +170,8 @@ class FinancialIngestor:
                         val = row.get(field)
                         if val is not None:
                             setattr(qf, field, val)
+                    qf.source = "bse_pdf_parser"
+                    qf.confidence = confidence_for("bse_pdf_parser")
                     if not existing:
                         session.add(qf)
                 session.commit()

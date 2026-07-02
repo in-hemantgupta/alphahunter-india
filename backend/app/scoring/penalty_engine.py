@@ -1,8 +1,6 @@
 from app.forensics.cashflow_integrity import cashflow_integrity_score
-from app.forensics.working_capital import working_capital_score
 from app.forensics.promoter_behavior import promoter_behavior_score
 from app.forensics.equity_dilution import dilution_score
-from app.forensics.fraud_probability import fraud_probability_score
 
 
 def _hard_caps(data) -> list:
@@ -89,40 +87,19 @@ def forensic_penalty(data, ranker=None):
         elif cash_conversion < 0.7:
             penalties.append(("cash_mismatch", 10))
 
-    try:
-        f_score = fraud_probability_score(data)
-        if f_score > 50:
-            penalties.append(("fraud_risk", f_score * 0.25))
-    except:
-        pass
+    # Rule 1: each of these returns None (not a fabricated score) when its
+    # underlying data is missing - skip the penalty rather than guess.
+    cf_score = cashflow_integrity_score(data)
+    if cf_score is not None and cf_score < 40:
+        penalties.append(("cashflow_integrity", (40 - cf_score) * 0.5))
 
-    try:
-        cf_score = cashflow_integrity_score(data)
-        if cf_score < 40:
-            penalties.append(("cashflow_integrity", (40 - cf_score) * 0.5))
-    except:
-        pass
+    d_score = dilution_score(data)
+    if d_score is not None and d_score < 40:
+        penalties.append(("dilution_risk", (40 - d_score) * 0.5))
 
-    try:
-        wc_score = working_capital_score(data)
-        if wc_score < 40:
-            penalties.append(("working_capital", (40 - wc_score) * 0.5))
-    except:
-        pass
-
-    try:
-        d_score = dilution_score(data)
-        if d_score < 40:
-            penalties.append(("dilution_risk", (40 - d_score) * 0.5))
-    except:
-        pass
-
-    try:
-        pb_score = promoter_behavior_score(data)
-        if pb_score < 40:
-            penalties.append(("promoter_risk", (40 - pb_score) * 0.5))
-    except:
-        pass
+    pb_score = promoter_behavior_score(data)
+    if pb_score is not None and pb_score < 40:
+        penalties.append(("promoter_risk", (40 - pb_score) * 0.5))
 
     debt_val = data.get("debt") or 0
     interest = data.get("interest_expense") or 0

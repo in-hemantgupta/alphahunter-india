@@ -1,6 +1,6 @@
 import pandas as pd
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -9,9 +9,10 @@ from app.models.stock import Stock
 from app.models.price_history import PriceHistory
 from app.models.quarterly import QuarterlyFinancials
 from app.models.shareholding import ShareholdingPattern
+from app.models.factor_value import FactorValue
 from app.models.scored_stock import ScoredStock
 from app.models.score_snapshot import ScoreSnapshot
-from app.scoring.alpha_engine import alpha_score, get_score_breakdown, batch_normalize_scores
+from app.scoring.alpha_engine import alpha_score, get_score_breakdown, batch_normalize_scores, _LAYER_AS_OF_FIELD
 from app.scoring.ranker import PercentileRanker
 from app.ingestion.fetch_universe import build_stock_universe
 from app.ingestion.financial_ingestor import FinancialIngestor
@@ -19,6 +20,7 @@ from app.ingestion.shareholding_ingestor import ShareholdingIngestor
 from app.services.elimination import run_elimination_pipeline
 from app.services.data_validation import validate_data_coverage, validate_score_distribution
 from app.models.alternative_signals import AlternativeSignal
+from app.models.insider_trade import InsiderTrade
 from app.models.llm_analysis import LLMAnalysis
 import json
 from app.services.data_freshness import DataFreshnessMonitor
@@ -96,30 +98,20 @@ def ingest_stock_prices(symbol: str, session: Session):
         return False
 
 
-import hashlib
-
-
-def _calculate_delivery_ratio(prices, volumes):
-    """Estimate delivery ratio from volume patterns.
-    Uses high-volume days with small price moves as proxy for accumulation (delivery buying)."""
-    if len(prices) < 5 or len(volumes) < 5:
-        return 1.0
-
-    avg_vol = sum(volumes[:20]) / min(20, len(volumes))
-    if avg_vol == 0:
-        return 1.0
-
-    high_vol_days = 0
-    total_days = min(20, len(prices))
-
-    for i in range(total_days):
-        if volumes[i] > avg_vol * 1.5:
-            price_move = abs(prices[i].close - prices[i].open) / prices[i].open if prices[i].open > 0 else 0
-            if price_move < 0.02:
-                high_vol_days += 1
-
-    ratio = 1.0 + (high_vol_days / total_days) * 1.5
-    return min(3.0, ratio)
+def _quarter_end_date(quarter: str):
+    """'2024-Q1' -> date(2024, 3, 31). Returns None on any format we don't
+    recognize instead of guessing - freshness_decay treats unknown age as a
+    conservative default, not "fresh"."""
+    if not quarter:
+        return None
+    try:
+        year_s, q_s = quarter.split("-Q")
+        year, q = int(year_s), int(q_s)
+        month = q * 3
+        day = 31 if month in (3, 12) else 30
+        return date(year, month, day)
+    except (ValueError, AttributeError):
+        return None
 
 
 def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
@@ -287,7 +279,16 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         if q.cash_flow_operations is not None and q.cash_flow_operations < 0:
             cfo_negative_4q_count += 1
 
-    delivery_ratio = _calculate_delivery_ratio(prices, all_volumes)
+    # Phase 2 Task 1: NSE bhavcopy (nsearchives.nseindia.com) is reachable
+    # unauthenticated and carries real DELIV_PER - see nse_bhavcopy.py.
+    # RESEARCH_BIBLE.md formula: current delivery% / 20-day average delivery%.
+    # None (not the pre-ingestion-era heuristic) until at least 2 real
+    # delivery_pct readings exist for this symbol.
+    deliv_values = [p.delivery_pct for p in prices[:20] if p.delivery_pct is not None]
+    delivery_ratio = None
+    if prices[0].delivery_pct is not None and len(deliv_values) >= 2:
+        avg_deliv = sum(deliv_values) / len(deliv_values)
+        delivery_ratio = prices[0].delivery_pct / avg_deliv if avg_deliv > 0 else None
 
     if len(closes) >= 20:
         sma_20 = sum(closes[:20]) / 20
@@ -307,16 +308,26 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
     vwap_defense = current_price >= vwap * 0.98 if vwap > 0 else False
     price_compression = compression_pattern
     seller_exhaustion = returns_6m < -10 and volume_ratio < 0.7
-    bulk_deal_positive = False
+    # Rule 1: needs real NSE bulk/block-deal ingestion (Phase 2D), not wired yet
+    bulk_deal_positive = None
 
     promoter_declining = promoter_change is not None and promoter_change < -5
-    auditor_changed = False
-    dilution_rate = 0
+    # Rule 1: neither signal has a real data source wired yet.
+    # auditor_changed needs annual-report/BSE-announcement parsing (Phase 5).
+    # dilution_rate needs quarter-over-quarter share-count history, and
+    # QuarterlyFinancials has no shares_outstanding column to compute it from
+    # (Phase 2/3). Hardcoding these to "no change" fabricated a clean bill of
+    # governance health for every stock in the universe; None lets the
+    # scoring layer exclude the factor instead.
+    auditor_changed = None
+    dilution_rate = None
     cash_conversion = None
     latest_pat = quarterly_data[0].pat if quarterly_data and quarterly_data[0] and quarterly_data[0].pat is not None else None
     if operating_cashflow is not None and latest_pat is not None and latest_pat > 0:
         cash_conversion = operating_cashflow / latest_pat if operating_cashflow > 0 else 0
-    governance_red_flags = False
+    # Rule 1: needs the LLM governance-language pipeline (Phase 5) or RPT/audit
+    # filing parsing (Phase 2), neither wired yet
+    governance_red_flags = None
 
     roce_trend = None
     if len(quarterly_data) >= 3:
@@ -337,26 +348,28 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         symbol=symbol, date=datetime.today().date()
     ).first()
 
-    google_trend_score = alt_cache.google_trend_score if alt_cache and alt_cache.google_trend_score is not None else 0
-    contract_score = alt_cache.contract_score if alt_cache and alt_cache.contract_score is not None else 0
-    shipment_score = alt_cache.shipment_score if alt_cache and alt_cache.shipment_score is not None else 0
-    hiring_score = alt_cache.hiring_score if alt_cache and alt_cache.hiring_score is not None else 0
-    patent_score = alt_cache.patent_score if alt_cache and alt_cache.patent_score is not None else 0
-    news_score = alt_cache.news_score if alt_cache and alt_cache.news_score is not None else 0
+    # Rule 1: no cached signal for today -> None, not 0. A 0 reads as "we
+    # checked and there's no signal"; the truth is usually "we never checked".
+    google_trend_score = alt_cache.google_trend_score if alt_cache else None
+    contract_score = alt_cache.contract_score if alt_cache else None
+    shipment_score = alt_cache.shipment_score if alt_cache else None
+    hiring_score = alt_cache.hiring_score if alt_cache else None
+    patent_score = alt_cache.patent_score if alt_cache else None
+    news_score = alt_cache.news_score if alt_cache else None
 
     # Real data: read from LLMAnalysis cache table (populated by /enrich/llm)
     llm_cache = session.query(LLMAnalysis).filter_by(
         symbol=symbol, date=datetime.today().date()
     ).first()
 
-    annual_report_score = llm_cache.annual_score if llm_cache and llm_cache.annual_score is not None else 0
-    concall_score = llm_cache.concall_score if llm_cache and llm_cache.concall_score is not None else 0
-    narrative_score = llm_cache.narrative_score if llm_cache and llm_cache.narrative_score is not None else 0
-    risk_score = llm_cache.risk_score if llm_cache and llm_cache.risk_score is not None else 0
-    governance_score = llm_cache.governance_score if llm_cache and llm_cache.governance_score is not None else 0
+    annual_report_score = llm_cache.annual_score if llm_cache else None
+    concall_score = llm_cache.concall_score if llm_cache else None
+    narrative_score = llm_cache.narrative_score if llm_cache else None
+    risk_score = llm_cache.risk_score if llm_cache else None
+    governance_score = llm_cache.governance_score if llm_cache else None
     governance_language = governance_score  # same LLM output mapped for llm_score
-    sentiment_score = llm_cache.sentiment_score if llm_cache and llm_cache.sentiment_score is not None else 0
-    management_confidence = llm_cache.management_confidence if llm_cache and llm_cache.management_confidence is not None else 0
+    sentiment_score = llm_cache.sentiment_score if llm_cache else None
+    management_confidence = llm_cache.management_confidence if llm_cache else None
 
     # Sector rotation: relative outperformance vs benchmark (real derived metric)
     relative_perf = returns_1y - benchmark_return
@@ -419,8 +432,21 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
             beta = 1.0
 
     # Keep management_confidence/sentiment_score/governance_language from LLM cache above
-    insider_trades = 0
-    compensation_quality = 0
+    # Phase 2 Task 3: real SEBI PIT disclosures (app/ingestion/nse_insider_pit.py)
+    # now populate insider_trades - net count of buy vs sell Regulation 7(2)
+    # filings in the trailing 90 days, capped like the other alt-data signals.
+    # compensation_quality still has no data source anywhere in the system.
+    recent_pit = session.query(InsiderTrade).filter(
+        InsiderTrade.symbol == symbol,
+        InsiderTrade.date >= date.today() - timedelta(days=90),
+    ).all()
+    insider_trades = None
+    if recent_pit:
+        buys = sum(1 for t in recent_pit if t.transaction_type == "buy")
+        sells = sum(1 for t in recent_pit if t.transaction_type == "sell")
+        if buys or sells:
+            insider_trades = max(-5, min(5, buys - sells))
+    compensation_quality = None
 
     avg_daily_value = None
     if all_volumes and current_price:
@@ -474,7 +500,11 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         "rolling_volatility_60d": data_vol_60d,
         "seasonality": 0,
         "nifty_500_member": True,
-        "governance_clean": True,
+        # Rule 1: no governance-clean signal is actually computed anywhere
+        # (needs LLM annual-report parsing / RPT filings, Phase 2+5). Was
+        # hardcoded True, which handed every stock in the universe a clean
+        # governance bill by default - None lets management_score exclude it.
+        "governance_clean": None,
         "relative_strength": 50 + returns_1y * 0.5,
         "delivery_20d_avg": sum(all_volumes[:20]) / min(20, len(all_volumes)) if all_volumes else 0,
         "delivery_today": all_volumes[0] if all_volumes else 0,
@@ -536,6 +566,20 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         "pat_4q_avg": pat_4q_avg,
         "revenue_yoy": ((quarterly_data[0].revenue - revenue_prev) / abs(revenue_prev) * 100) if quarterly_data and len(quarterly_data) > 0 and quarterly_data[0].revenue is not None and revenue_prev is not None and revenue_prev != 0 else None,
         "cfo_negative_4q_count": cfo_negative_4q_count,
+        # Rule 5/9: real as-of dates per data domain, used by alpha_engine's
+        # Factor/composite_score to discount stale layers instead of
+        # trusting a 90-day-old quarterly filing as much as today's price.
+        "_price_as_of": prices[0].date if prices else None,
+        "_financials_as_of": _quarter_end_date(quarterly_data[0].quarter) if quarterly_data else None,
+        "_shareholding_as_of": (
+            shareholding_data[0].filing_date or shareholding_data[0].fetched_at.date()
+            if shareholding_data and (shareholding_data[0].filing_date or shareholding_data[0].fetched_at)
+            else None
+        ),
+        "_shareholding_confidence": shareholding_data[0].confidence if shareholding_data else None,
+        "_shareholding_source": shareholding_data[0].source if shareholding_data else None,
+        "_financials_confidence": quarterly_data[0].confidence if quarterly_data else None,
+        "_financials_source": quarterly_data[0].source if quarterly_data else None,
     }
 
     return data
@@ -791,6 +835,51 @@ def run_full_pipeline(force: bool = False):
 
         session.commit()
         print(f"Saved {len(ranked)} scored stocks to database")
+
+        # Rule 9: persist one factor_values row per layer per stock so every
+        # score is traceable back to its as-of date, confidence and freshness
+        # discount - not just the final composite number.
+        print("Writing factor_values audit trail...")
+        # Phase 2 Task 5: real source name per layer, not the as-of field
+        # name. growth/quality/management vary per stock (whichever
+        # fallback tier actually supplied that stock's data); price-driven
+        # layers are always yfinance_prices today.
+        _LAYER_SOURCE_KEY = {
+            "growth": "_financials_source",
+            "quality": "_financials_source",
+            "management": "_shareholding_source",
+        }
+        _LAYER_DEFAULT_SOURCE = {
+            "technical": "yfinance_prices",
+            "lowvol": "yfinance_prices",
+            "microstructure": "yfinance_prices",
+            "value": "yfinance_prices",
+        }
+        factor_rows = []
+        for stock_data in ranked:
+            breakdown = stock_data.get('_breakdown', {})
+            for layer_key, layer_info in breakdown.get('layers', {}).items():
+                as_of = layer_info.get('as_of_date')
+                freshness_days = None
+                if as_of:
+                    freshness_days = (datetime.today().date() - date.fromisoformat(as_of)).days
+                source_key = _LAYER_SOURCE_KEY.get(layer_key)
+                source = (stock_data.get(source_key) if source_key else None) \
+                    or _LAYER_DEFAULT_SOURCE.get(layer_key, 'forensic_composite')
+                factor_rows.append({
+                    'symbol': stock_data['symbol'],
+                    'factor_name': layer_key,
+                    'raw_value': None,  # layer score is a weighted blend of multiple raw fields, no single raw value to report
+                    'normalized_score': layer_info.get('score'),
+                    'confidence': layer_info.get('confidence'),
+                    'source': source,
+                    'freshness_days': freshness_days,
+                    'as_of_date': as_of,
+                })
+        if factor_rows:
+            session.bulk_insert_mappings(FactorValue, factor_rows)
+            session.commit()
+        print(f"Wrote {len(factor_rows)} factor_values audit rows")
 
         # Insert score snapshot
         snapshot_date = datetime.today().date()

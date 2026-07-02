@@ -126,6 +126,8 @@ def stage_6_alternative_filter(symbol: str, data: Dict) -> Tuple[bool, str]:
 
 def stage_7_llm_filter(symbol: str, data: Dict) -> Tuple[bool, str]:
     l_score = llm_score(data)
+    if l_score is None:
+        return True, "LLM analysis unavailable — skipping"
 
     if l_score < 45:
         return False, f"LLM score {l_score:.1f} < 45"

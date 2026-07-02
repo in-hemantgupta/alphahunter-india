@@ -29,3 +29,4 @@ from app.models.portfolio_position import PortfolioPosition
 from app.models.trade_decision_log import TradeDecisionLog
 from app.models.fund_nav import FundNav
 from app.models.kill_switch_state import KillSwitchState
+from app.models.factor_value import FactorValue

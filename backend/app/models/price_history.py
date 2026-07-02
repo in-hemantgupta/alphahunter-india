@@ -12,3 +12,4 @@ class PriceHistory(Base):
     low = Column(Float)
     close = Column(Float)
     volume = Column(Float)
+    delivery_pct = Column(Float)

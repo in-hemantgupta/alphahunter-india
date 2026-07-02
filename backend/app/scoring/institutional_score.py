@@ -1,6 +1,11 @@
 def institutional_score(data, ranker=None, _debug=False):
-    delivery_ratio = data.get("delivery_ratio") or 1
-    volume_ratio = data.get("volume_ratio") or 1
+    """Rule 1/5: delivery_ratio has been None for every stock since the fake
+    volume-heuristic proxy that used to compute it was deleted (pipeline.py) -
+    `delivery_ratio or 1` was silently turning that into a constant
+    delivery_score=20 fed into every stock's microstructure layer forever.
+    Missing components are excluded and remaining weights renormalize."""
+    delivery_ratio = data.get("delivery_ratio")
+    volume_ratio = data.get("volume_ratio")
     volume_high = data.get("volume_high", False)
     price_flat = data.get("price_flat", False)
     vwap_defense = data.get("vwap_defense", False)
@@ -9,13 +14,19 @@ def institutional_score(data, ranker=None, _debug=False):
     fii_change = data.get("fii_change")
     dii_change = data.get("dii_change")
 
-    if ranker:
-        delivery_score = ranker.pct("delivery_ratio", min(delivery_ratio, 5))
-        volume_score = ranker.pct("volume_ratio", min(volume_ratio, 10))
-    else:
-        delivery_score = min(100, (delivery_ratio - 0.5) * 40)
-        volume_score = min(100, volume_ratio * 25)
+    components = {}  # name -> (score, weight, raw)
 
+    if delivery_ratio is not None:
+        s = ranker.pct("delivery_ratio", min(delivery_ratio, 5)) if ranker else min(100, (delivery_ratio - 0.5) * 40)
+        components["delivery_ratio"] = (s, 0.20, delivery_ratio)
+
+    if volume_ratio is not None:
+        s = ranker.pct("volume_ratio", min(volume_ratio, 10)) if ranker else min(100, volume_ratio * 25)
+        components["volume_anomaly"] = (s, 0.10, volume_ratio)
+
+    # volume_high/price_flat/vwap_defense/price_compression/seller_exhaustion
+    # are deterministic booleans computed from price history whenever prices
+    # exist (see pipeline.py) - never "unknown", so a plain default is fine.
     if volume_high and price_flat:
         float_absorption = 90
     elif volume_high:
@@ -24,28 +35,20 @@ def institutional_score(data, ranker=None, _debug=False):
         float_absorption = 55
     else:
         float_absorption = 35
+    components["float_absorption"] = (float_absorption, 0.15, {"volume_high": volume_high, "price_flat": price_flat})
 
-    vwap_score = 80 if vwap_defense else 35
-    compression_score = 80 if price_compression else 35
-    exhaustion_score = 80 if seller_exhaustion else 35
+    components["vwap_defense"] = (80 if vwap_defense else 35, 0.10, vwap_defense)
+    components["price_compression"] = (80 if price_compression else 35, 0.10, price_compression)
+    components["seller_exhaustion"] = (80 if seller_exhaustion else 35, 0.10, seller_exhaustion)
 
-    fii_score = 50
-    dii_score = 50
     if fii_change is not None:
-        fii_score = min(100, max(0, 50 + fii_change * 5))
-    if dii_change is not None:
-        dii_score = min(100, max(0, 50 + dii_change * 5))
+        components["fii_change"] = (min(100, max(0, 50 + fii_change * 5)), 0.15, fii_change)
 
-    score = (
-        delivery_score * 0.20 +
-        float_absorption * 0.15 +
-        volume_score * 0.10 +
-        vwap_score * 0.10 +
-        compression_score * 0.10 +
-        exhaustion_score * 0.10 +
-        fii_score * 0.15 +
-        dii_score * 0.10
-    )
+    if dii_change is not None:
+        components["dii_change"] = (min(100, max(0, 50 + dii_change * 5)), 0.10, dii_change)
+
+    total_weight = sum(w for _, w, _ in components.values())
+    score = sum(s * w for s, w, _ in components.values()) / total_weight if total_weight > 0 else 50
 
     final = min(100, max(0, score))
 
@@ -53,15 +56,9 @@ def institutional_score(data, ranker=None, _debug=False):
         return final, {
             "score": final,
             "components": {
-                "delivery_ratio": {"raw": delivery_ratio, "score": delivery_score, "weight": 0.20},
-                "float_absorption": {"raw": {"volume_high": volume_high, "price_flat": price_flat}, "score": float_absorption, "weight": 0.15},
-                "volume_anomaly": {"raw": volume_ratio, "score": volume_score, "weight": 0.10},
-                "vwap_defense": {"raw": vwap_defense, "score": vwap_score, "weight": 0.10},
-                "price_compression": {"raw": price_compression, "score": compression_score, "weight": 0.10},
-                "seller_exhaustion": {"raw": seller_exhaustion, "score": exhaustion_score, "weight": 0.10},
-                "fii_change": {"raw": fii_change, "score": fii_score, "weight": 0.15},
-                "dii_change": {"raw": dii_change, "score": dii_score, "weight": 0.10},
-            }
+                name: {"raw": raw, "score": s, "weight": w}
+                for name, (s, w, raw) in components.items()
+            },
         }
 
     return final

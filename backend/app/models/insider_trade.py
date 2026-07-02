@@ -14,4 +14,7 @@ class InsiderTrade(Base):
     quantity = Column(Integer)
     avg_price = Column(Float)
     insider_role = Column(String)
+    value = Column(Float)
+    source = Column(String, nullable=True)
+    confidence = Column(Float, nullable=True)
     created_at = Column(DateTime, server_default=func.now())

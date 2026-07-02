@@ -1,4 +1,4 @@
-from app.scoring.fundamental_score import fundamental_score
+from datetime import date
 from app.scoring.growth_score import growth_score
 from app.scoring.management_score import management_score
 from app.scoring.institutional_score import institutional_score
@@ -8,9 +8,10 @@ from app.scoring.value_score import value_score
 from app.scoring.quality_score import quality_score
 from app.scoring.lowvol_score import lowvol_score
 from app.scoring.penalty_engine import penalty_engine, forensic_penalty, FORENSIC_CHECK_FIELDS, confidence_penalty
+from app.scoring.factor import freshness_decay, Factor
 
 __all__ = [
-    'fundamental_score', 'growth_score', 'management_score',
+    'growth_score', 'management_score',
     'institutional_score', 'technical_score',
     'value_score', 'quality_score',
     'lowvol_score',
@@ -18,11 +19,23 @@ __all__ = [
     'LAYER_WEIGHTS',
 ]
 
+# Rule 5: every layer that _KEY_MAP/_SCORE_FN_MAP can actually compute must be
+# wired here. quality/management/microstructure/lowvol were computed every run
+# but silently dropped from the composite because they weren't in this dict -
+# a wired-with-no-effect bug, worse than not computing them at all since it
+# made the score look 8-factor while only 4 factors ever moved it.
+# Layers with <30% field coverage for a given stock are excluded at scoring
+# time (see _score_layer) and the remaining weights are renormalized - that's
+# the dynamic redistribution called for by Rule 5, not something bolted on.
 LAYER_WEIGHTS = {
-    "growth": 0.35,
-    "technical": 0.30,
-    "forensic": 0.25,
-    "value": 0.10,
+    "growth": 0.20,
+    "quality": 0.15,
+    "technical": 0.15,
+    "forensic": 0.15,
+    "management": 0.10,
+    "microstructure": 0.10,
+    "value": 0.08,
+    "lowvol": 0.07,
 }
 
 _FUNDAMENTAL_KEYS = ["roce", "debt_equity", "operating_margin", "margin_stability", "revenue", "pat"]
@@ -55,6 +68,42 @@ _SCORE_FN_MAP = {
     "lowvol": lowvol_score,
     "value": value_score,
 }
+
+# Rule 5/9: which data domain each layer's freshness should be judged by.
+# Forensic draws on both financials and shareholding - conservatively use
+# whichever of the two is staler, not the fresher one.
+_LAYER_AS_OF_FIELD = {
+    "growth": "_financials_as_of",
+    "quality": "_financials_as_of",
+    "technical": "_price_as_of",
+    "lowvol": "_price_as_of",
+    "microstructure": "_price_as_of",
+    "value": "_price_as_of",
+    "management": "_shareholding_as_of",
+}
+
+
+def _layer_as_of(layer, data):
+    if layer == "forensic":
+        candidates = [data.get("_financials_as_of"), data.get("_shareholding_as_of")]
+        candidates = [c for c in candidates if c is not None]
+        return min(candidates) if candidates else None
+    field = _LAYER_AS_OF_FIELD.get(layer)
+    return data.get(field) if field else None
+
+
+def _layer_confidence(layer, data):
+    if layer == "management" and data.get("_shareholding_confidence") is not None:
+        return data["_shareholding_confidence"]
+    if layer in ("growth", "quality") and data.get("_financials_confidence") is not None:
+        return data["_financials_confidence"]
+    return 1.0
+
+
+def _layer_freshness_multiplier(layer, data):
+    as_of = _layer_as_of(layer, data)
+    freshness_days = (date.today() - as_of).days if as_of else None
+    return freshness_decay(freshness_days) * _layer_confidence(layer, data)
 
 
 def _layer_populated(data, keys):
@@ -122,7 +171,7 @@ def alpha_score(stock_data, ranker=None):
     total_weight = 0.0
     for key, score in layer_scores.items():
         if score is not None:
-            effective_weight = weights[key]
+            effective_weight = weights[key] * _layer_freshness_multiplier(key, stock_data)
             composite += score * effective_weight
             total_weight += effective_weight
 
@@ -197,20 +246,32 @@ def get_score_breakdown(data, ranker=None):
             components = dbg["components"]
 
         if total > 0 and present / total >= 0.3:
+            as_of = _layer_as_of(key, data)
+            freshness_mult = _layer_freshness_multiplier(key, data)
+            adjusted_weight = weights[key] * freshness_mult
             layers[key] = {
                 "score": score,
                 "weight": weights[key],
                 "weighted": round(score * weights[key], 2),
                 "components": components,
                 "data_quality": f"{present}/{total}",
+                "as_of_date": as_of.isoformat() if as_of else None,
+                "freshness_multiplier": round(freshness_mult, 3),
+                "confidence": round(_layer_confidence(key, data), 3),
             }
-            composite += score * weights[key]
-            total_weight += weights[key]
+            composite += score * adjusted_weight
+            total_weight += adjusted_weight
 
     if total_weight > 0:
+        # Rule 5: renormalize by the weight actually available, same as
+        # alpha_score() - previously missing here, so composite silently
+        # under-counted whenever any layer was excluded or freshness-discounted
+        # instead of redistributing that weight across the remaining layers.
+        composite /= total_weight
         for key in layers:
-            layers[key]["effective_weight"] = round(layers[key]["weight"] / total_weight, 4)
-            layers[key]["effective_weighted"] = round(layers[key]["score"] * layers[key]["weight"] / total_weight, 2)
+            adjusted_weight = layers[key]["weight"] * layers[key]["freshness_multiplier"]
+            layers[key]["effective_weight"] = round(adjusted_weight / total_weight, 4)
+            layers[key]["effective_weighted"] = round(layers[key]["score"] * adjusted_weight / total_weight, 2)
 
     penalty, pen_detail, _ = forensic_penalty(data, ranker)
     conf_penalty = confidence_penalty(data)
@@ -253,23 +314,36 @@ def get_score_breakdown(data, ranker=None):
 
 
 def llm_score(stock, _debug=False):
-    annual = stock.get("annual_report_score") or 0
-    concall = stock.get("concall_score") or 0
-    sentiment = stock.get("sentiment_score") or 0
-    narrative = stock.get("narrative_score") or 0
-    risk = stock.get("risk_score") or 0
-    mgmt_confidence = stock.get("management_confidence") or 0
-    governance_language = stock.get("governance_language") or 0
+    """Rule 1/5: LLM annual-report/concall analysis (app/llm_engine) hasn't run
+    for most of the universe yet - `annual_report_score or 0` used to treat
+    "never analyzed" identically to "analyzed and scored 0", which made
+    elimination.py's stage_7_llm_filter (threshold 45) auto-eliminate every
+    stock lacking LLM coverage regardless of its actual quality. Returns None
+    when no LLM field is populated at all, so the caller can skip the gate
+    instead of failing it on absent data."""
+    fields = {
+        "annual_report_score": ("annual_report", 0.20),
+        "concall_score": ("concall_analysis", 0.25),
+        "sentiment_score": ("sentiment", 0.10),
+        "narrative_score": ("narrative_shift", 0.15),
+        "risk_score": ("risk_extraction", 0.10),
+        "management_confidence": ("management_confidence", 0.10),
+        "governance_language": ("governance_language", 0.10),
+    }
 
-    score = (
-        annual * 0.20 +
-        concall * 0.25 +
-        sentiment * 0.10 +
-        narrative * 0.15 +
-        risk * 0.10 +
-        mgmt_confidence * 0.10 +
-        governance_language * 0.10
-    )
+    components = {}
+    for key, (label, weight) in fields.items():
+        val = stock.get(key)
+        if val is not None:
+            components[label] = (val, weight, val)
+
+    if not components:
+        if _debug:
+            return None, {"score": None, "components": {}}
+        return None
+
+    total_weight = sum(w for _, w, _ in components.values())
+    score = sum(s * w for s, w, _ in components.values()) / total_weight
 
     final = min(100, max(0, score))
 
@@ -277,14 +351,9 @@ def llm_score(stock, _debug=False):
         return final, {
             "score": final,
             "components": {
-                "annual_report": {"raw": "", "score": annual, "weight": 0.20},
-                "concall_analysis": {"raw": "", "score": concall, "weight": 0.25},
-                "sentiment": {"raw": "", "score": sentiment, "weight": 0.10},
-                "narrative_shift": {"raw": "", "score": narrative, "weight": 0.15},
-                "risk_extraction": {"raw": "", "score": risk, "weight": 0.10},
-                "management_confidence": {"raw": "", "score": mgmt_confidence, "weight": 0.10},
-                "governance_language": {"raw": "", "score": governance_language, "weight": 0.10},
-            }
+                name: {"raw": raw, "score": s, "weight": w}
+                for name, (s, w, raw) in components.items()
+            },
         }
 
     return final
@@ -301,7 +370,7 @@ def _score_layer_debug(layer, data, ranker):
     return 0, {"present": 0, "total": 1, "components": {}}
 
 
-BATCH_NORMALIZE_LAYERS = ["quality", "growth", "technical", "microstructure", "value", "lowvol", "forensic"]
+BATCH_NORMALIZE_LAYERS = list(LAYER_WEIGHTS.keys())
 
 
 def batch_normalize_scores(scored_data_list: list[dict]) -> list[dict]:
@@ -356,10 +425,11 @@ def batch_normalize_scores(scored_data_list: list[dict]) -> list[dict]:
             z_score = 100 / (1 + math.exp(-z))
             info["score"] = round(z_score, 2)
             info["z_normalized"] = True
-            weighted = z_score * weights.get(layer, 0)
+            adjusted_weight = weights.get(layer, 0) * _layer_freshness_multiplier(layer, sd)
+            weighted = z_score * adjusted_weight
             info["weighted"] = round(weighted, 2)
             composite += weighted
-            total_weight += weights.get(layer, 0)
+            total_weight += adjusted_weight
 
         if total_weight > 0:
             composite /= total_weight
@@ -391,7 +461,8 @@ def batch_normalize_scores(scored_data_list: list[dict]) -> list[dict]:
 
         if total_weight > 0:
             for layer in layers:
-                layers[layer]["effective_weight"] = round(weights.get(layer, 0) / total_weight, 4)
+                adjusted_weight = weights.get(layer, 0) * _layer_freshness_multiplier(layer, sd)
+                layers[layer]["effective_weight"] = round(adjusted_weight / total_weight, 4)
 
         breakdown["total_score"] = final_score
         breakdown["composite"] = round(composite, 2)
