@@ -28,6 +28,10 @@ from app.models.ml_predictions import MLPrediction
 from app.models.hypotheses import Hypothesis
 from app.models.autonomous_actions import AutonomousAction
 from app.models.learning_history import LearningHistory
+from app.models.score_snapshot import ScoreSnapshot
+from app.models.scored_stock import ScoredStock
+from app.models.market_regime import MarketRegime
+from app.models.paper_trading import PaperPosition, PaperTrade
 
 config = context.config
 

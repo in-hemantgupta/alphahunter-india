@@ -12,4 +12,6 @@ class LLMAnalysis(Base):
     governance_score = Column(Float)
     narrative_score = Column(Float)
     risk_score = Column(Float)
+    sentiment_score = Column(Float)
+    management_confidence = Column(Float)
     final_score = Column(Float)

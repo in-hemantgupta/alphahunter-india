@@ -1,9 +1,15 @@
+from datetime import datetime, timezone
 import yfinance as yf
 from app.db.database import SessionLocal
 from app.models.shareholding import ShareholdingPattern
 
 
 class ShareholdingIngestor:
+
+    def _current_quarter(self) -> str:
+        now = datetime.now(timezone.utc)
+        quarter = (now.month - 1) // 3 + 1
+        return f"{now.year}-Q{quarter}"
 
     def fetch_shareholding(self, symbol: str) -> bool:
         try:
@@ -20,31 +26,31 @@ class ShareholdingIngestor:
 
                 if major_holders is not None and not major_holders.empty:
                     for _, row in major_holders.iterrows():
-                        pct = row.get('pctHeld', 0) or 0
-                        holder = str(row.get('Holder', '')).lower()
+                        pct = row.get("pctHeld", 0) or 0
+                        holder = str(row.get("Holder", "")).lower()
 
-                        if 'promoter' in holder or 'insider' in holder:
+                        if "promoter" in holder or "insider" in holder:
                             promoter_pct = pct
-                        elif 'fii' in holder or 'foreign' in holder:
+                        elif "fii" in holder or "foreign" in holder:
                             fii_pct = pct
-                        elif 'dii' in holder or 'mutual' in holder or 'domestic' in holder:
+                        elif "dii" in holder or "mutual" in holder or "domestic" in holder:
                             dii_pct = pct
 
                 if institutional_holders is not None and not institutional_holders.empty:
                     for _, row in institutional_holders.iterrows():
-                        pct = row.get('pctHeld', 0) or 0
-                        holder = str(row.get('Holder', '')).lower()
+                        pct = row.get("pctHeld", 0) or 0
+                        holder = str(row.get("Holder", "")).lower()
 
-                        if 'fii' in holder or 'foreign' in holder:
+                        if "fii" in holder or "foreign" in holder:
                             fii_pct = max(fii_pct, pct)
-                        elif 'dii' in holder or 'mutual' in holder:
+                        elif "dii" in holder or "mutual" in holder:
                             dii_pct = max(dii_pct, pct)
 
-                quarter_str = "2026-Q2"
+                quarter_str = self._current_quarter()
 
                 existing = session.query(ShareholdingPattern).filter_by(
                     symbol=symbol,
-                    quarter=quarter_str
+                    quarter=quarter_str,
                 ).first()
 
                 if existing:
@@ -59,7 +65,7 @@ class ShareholdingIngestor:
                         promoter=promoter_pct,
                         fii=fii_pct,
                         dii=dii_pct,
-                        pledge=pledge_pct
+                        pledge=pledge_pct,
                     )
                     session.add(record)
 

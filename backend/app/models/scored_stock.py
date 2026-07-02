@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, DateTime, Integer, Boolean
+from sqlalchemy import Column, String, Float, DateTime, Integer, Boolean, Text
 from sqlalchemy.sql import func
 from app.db.base import Base
 
@@ -9,6 +9,16 @@ class ScoredStock(Base):
     symbol = Column(String, primary_key=True)
     company_name = Column(String)
     total_score = Column(Float)
+    fundamental_score = Column(Float)
+    growth_score = Column(Float)
+    management_score = Column(Float)
+    institutional_score = Column(Float)
+    microstructure_score = Column(Float)
+    forensic_score = Column(Float)
+    alternative_score = Column(Float)
+    technical_score = Column(Float)
+    llm_score = Column(Float)
+    layer_breakdown_json = Column(Text)
     current_price = Column(Float)
     returns_6m = Column(Float)
     returns_1y = Column(Float)
@@ -37,6 +47,12 @@ class ScoredStock(Base):
     governance_score = Column(Float)
     narrative_score = Column(Float)
     risk_score = Column(Float)
+    quality_score = Column(Float)
+    momentum_score = Column(Float)
+    lowvol_score = Column(Float)
+    macro_score = Column(Float)
+    value_score = Column(Float)
+    confidence_score = Column(Float)
     management_confidence = Column(Float)
     elimination_stages = Column(String)
     passed_elimination = Column(Boolean, default=False)

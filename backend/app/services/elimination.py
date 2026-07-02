@@ -8,19 +8,27 @@ from app.scoring.alpha_engine import alternative_score, llm_score
 
 
 def stage_1_liquidity_filter(symbol: str, session: Session) -> Tuple[bool, str]:
-    avg_daily_value = session.query(PriceHistory).filter_by(symbol=symbol).with_entities(
-        (PriceHistory.close * PriceHistory.volume).label('daily_value')
-    ).order_by(PriceHistory.date.desc()).limit(30).all()
+    prices = session.query(PriceHistory).filter_by(symbol=symbol).order_by(
+        PriceHistory.date.desc()).limit(252).all()
 
-    if not avg_daily_value:
+    if not prices:
         return False, "No price data"
 
-    avg_value = sum(row.daily_value for row in avg_daily_value) / len(avg_daily_value)
+    avg_daily_value_rows = [(p.close * p.volume) for p in prices[:30]]
+    avg_value = sum(avg_daily_value_rows) / len(avg_daily_value_rows)
 
-    if avg_value < 50_00_000:
-        return False, f"Liquidity too low: ₹{avg_value/1_00_00_000:.2f}Cr < ₹50L"
+    if avg_value < 1_00_00_000:
+        return False, f"Liquidity too low: ₹{avg_value/1_00_00_000:.2f}Cr < ₹1Cr"
 
-    return True, "Liquidity OK"
+    # Check trading day coverage: must trade >= 80% of available days
+    total_days = len(prices)
+    if total_days >= 100:
+        zero_volume_days = sum(1 for p in prices if p.volume is None or p.volume == 0)
+        trading_pct = (total_days - zero_volume_days) / total_days * 100
+        if trading_pct < 80:
+            return False, f"Traded only {trading_pct:.0f}% of days (<80%)"
+
+    return True, f"Liquidity OK (avg ₹{avg_value/1_00_00_000:.2f}Cr)"
 
 
 def stage_2_fundamental_elimination(symbol: str, session: Session) -> Tuple[bool, str]:
@@ -105,8 +113,11 @@ def stage_5_microstructure_filter(symbol: str, session: Session, data: Dict) -> 
 
 
 def stage_6_alternative_filter(symbol: str, data: Dict) -> Tuple[bool, str]:
-    alt_score = alternative_score(data)
+    has_real_data = any(data.get(k) for k in ["news_score", "contract_score", "patent_score", "hiring_score", "insider_trades"])
+    if not has_real_data:
+        return True, "Alternative data unavailable — skipping"
 
+    alt_score = alternative_score(data)
     if alt_score < 40:
         return False, f"Alternative score {alt_score:.1f} < 40"
 

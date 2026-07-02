@@ -10,29 +10,30 @@ from app.models.price_history import PriceHistory
 from app.models.quarterly import QuarterlyFinancials
 from app.models.shareholding import ShareholdingPattern
 from app.models.scored_stock import ScoredStock
-from app.scoring.alpha_engine import alpha_score
+from app.models.score_snapshot import ScoreSnapshot
+from app.scoring.alpha_engine import alpha_score, get_score_breakdown, batch_normalize_scores
+from app.scoring.ranker import PercentileRanker
 from app.ingestion.fetch_universe import build_stock_universe
 from app.ingestion.financial_ingestor import FinancialIngestor
 from app.ingestion.shareholding_ingestor import ShareholdingIngestor
 from app.services.elimination import run_elimination_pipeline
+from app.services.data_validation import validate_data_coverage, validate_score_distribution
+from app.models.alternative_signals import AlternativeSignal
+from app.models.llm_analysis import LLMAnalysis
+import json
+from app.services.data_freshness import DataFreshnessMonitor
+from app.services.audit_logger import AuditLogger
 
 _nifty_return_cache = None
+_nifty_hist_cache = None
 
 
 def _get_nifty_return():
     global _nifty_return_cache
     if _nifty_return_cache is not None:
         return _nifty_return_cache
-    try:
-        nifty = yf.Ticker("^NSEI")
-        hist = nifty.history(period="1y")
-        if len(hist) > 2:
-            _nifty_return_cache = ((hist["Close"].iloc[-1] - hist["Close"].iloc[0]) / hist["Close"].iloc[0]) * 100
-        else:
-            _nifty_return_cache = 0
-    except:
-        _nifty_return_cache = 0
-    return _nifty_return_cache
+    _nifty_return_cache = 0
+    return 0
 
 
 def _ingest_one(symbol: str) -> tuple[str, bool]:
@@ -76,10 +77,15 @@ def ingest_stock_prices(symbol: str, session: Session):
                 session.add(price_record)
 
         stock = session.query(Stock).filter_by(symbol=symbol).first()
-        if stock and not stock.market_cap:
-            mcap = info.get('marketCap')
-            if mcap is not None and isinstance(mcap,(int,float)) and mcap > 0:
-                stock.market_cap = int(mcap)
+        if stock:
+            if not stock.market_cap:
+                mcap = info.get('marketCap')
+                if mcap is not None and isinstance(mcap,(int,float)) and mcap > 0:
+                    stock.market_cap = int(mcap)
+            if not stock.sector or stock.sector == 'Unknown':
+                sector = info.get('sector')
+                if sector and str(sector).strip() not in ('', 'N/A', 'Unknown'):
+                    stock.sector = str(sector).strip()
 
         session.commit()
         return True
@@ -168,28 +174,26 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         symbol=symbol
     ).order_by(QuarterlyFinancials.quarter.desc()).limit(8).all()
 
-    roce = 0
-    roe = 0
-    debt_equity = 1
-    revenue_acceleration = 0
-    pat_acceleration = 0
-    margin_expansion = 0
-    cashflow_improvement = 0
-    operating_cashflow = 0
-    fcf_trend = 0
-    margin_stability = 0
+    roce = None
+    roe = None
+    debt_equity = None
+    revenue_acceleration = None
+    pat_acceleration = None
+    margin_expansion = None
+    cashflow_improvement = None
+    operating_cashflow = None
+    fcf_trend = None
+    margin_stability = None
 
     if len(quarterly_data) >= 2:
         latest = quarterly_data[0]
         prev = quarterly_data[1]
 
-        roce = latest.roce or 0
-        roe = latest.roe or 0
-        debt_equity = latest.debt_equity or 1
+        roce = latest.roce
+        roe = latest.roe
+        debt_equity = latest.debt_equity
 
-        operating_cashflow = 0
-        if latest.pat:
-            operating_cashflow = latest.pat * 0.85
+        operating_cashflow = latest.cash_flow_operations or None
 
         if prev.revenue and prev.revenue > 0 and latest.revenue:
             revenue_growth_latest = ((latest.revenue - prev.revenue) / prev.revenue) * 100
@@ -256,8 +260,10 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         symbol=symbol
     ).order_by(ShareholdingPattern.quarter.desc()).limit(4).all()
 
-    promoter_change = 0
-    pledge_percent = 0
+    promoter_change = None
+    pledge_percent = None
+    fii_change = None
+    dii_change = None
 
     if len(shareholding_data) >= 2:
         latest_sh = shareholding_data[0]
@@ -266,8 +272,20 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         if latest_sh.promoter is not None and prev_sh.promoter is not None:
             promoter_change = latest_sh.promoter - prev_sh.promoter
 
+        if latest_sh.fii is not None and prev_sh.fii is not None:
+            fii_change = latest_sh.fii - prev_sh.fii
+
+        if latest_sh.dii is not None and prev_sh.dii is not None:
+            dii_change = latest_sh.dii - prev_sh.dii
+
         if latest_sh.pledge is not None:
             pledge_percent = latest_sh.pledge
+
+    # CFO negative count: count quarters with negative operating cashflow
+    cfo_negative_4q_count = 0
+    for q in quarterly_data[:4]:
+        if q.cash_flow_operations is not None and q.cash_flow_operations < 0:
+            cfo_negative_4q_count += 1
 
     delivery_ratio = _calculate_delivery_ratio(prices, all_volumes)
 
@@ -291,164 +309,56 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
     seller_exhaustion = returns_6m < -10 and volume_ratio < 0.7
     bulk_deal_positive = False
 
-    promoter_declining = promoter_change < -5
+    promoter_declining = promoter_change is not None and promoter_change < -5
     auditor_changed = False
     dilution_rate = 0
-    cash_conversion = 1.0 if operating_cashflow > 0 else 0.5
+    cash_conversion = None
+    latest_pat = quarterly_data[0].pat if quarterly_data and quarterly_data[0] and quarterly_data[0].pat is not None else None
+    if operating_cashflow is not None and latest_pat is not None and latest_pat > 0:
+        cash_conversion = operating_cashflow / latest_pat if operating_cashflow > 0 else 0
     governance_red_flags = False
 
-    roce_trend = 0
+    roce_trend = None
     if len(quarterly_data) >= 3:
-        roce_values = [q.roce for q in quarterly_data[:3] if q.roce]
+        roce_values = [q.roce for q in quarterly_data[:3] if q.roce is not None]
         if len(roce_values) >= 2:
             roce_trend = roce_values[0] - roce_values[-1]
 
-    capex_efficiency = 0
+    capex_efficiency = None
     if len(quarterly_data) >= 2:
         latest = quarterly_data[0]
         prev = quarterly_data[1]
-        if latest.revenue and prev.revenue and prev.revenue > 0:
+        if latest.revenue is not None and prev.revenue is not None and prev.revenue > 0:
             revenue_growth = ((latest.revenue - prev.revenue) / prev.revenue) * 100
             capex_efficiency = revenue_growth
 
-    # Calculate heuristic scores for Alternative Data layer
-    # Use available data as proxy signals
-    google_trend_score = 0
-    contract_score = 0
-    shipment_score = 0
-    hiring_score = 0
-    patent_score = 0
-    news_score = 0
+    # Real data: read from AlternativeSignal cache table (populated by /enrich/google-trends)
+    alt_cache = session.query(AlternativeSignal).filter_by(
+        symbol=symbol, date=datetime.today().date()
+    ).first()
 
-    # Use revenue acceleration as proxy for market interest
-    if revenue_acceleration >= 20:
-        google_trend_score = 95
-        news_score = 90
-    elif revenue_acceleration >= 15:
-        google_trend_score = 85
-        news_score = 80
-    elif revenue_acceleration >= 10:
-        google_trend_score = 75
-        news_score = 70
-    elif revenue_acceleration >= 5:
-        google_trend_score = 65
-        news_score = 60
-    elif revenue_acceleration >= 0:
-        google_trend_score = 50
-        news_score = 45
-    else:
-        google_trend_score = 35
-        news_score = 30
+    google_trend_score = alt_cache.google_trend_score if alt_cache and alt_cache.google_trend_score is not None else 0
+    contract_score = alt_cache.contract_score if alt_cache and alt_cache.contract_score is not None else 0
+    shipment_score = alt_cache.shipment_score if alt_cache and alt_cache.shipment_score is not None else 0
+    hiring_score = alt_cache.hiring_score if alt_cache and alt_cache.hiring_score is not None else 0
+    patent_score = alt_cache.patent_score if alt_cache and alt_cache.patent_score is not None else 0
+    news_score = alt_cache.news_score if alt_cache and alt_cache.news_score is not None else 0
 
-    # Use margin expansion as proxy for competitive advantage
-    if margin_expansion >= 200:
-        contract_score = 95
-        shipment_score = 90
-    elif margin_expansion >= 150:
-        contract_score = 85
-        shipment_score = 80
-    elif margin_expansion >= 100:
-        contract_score = 75
-        shipment_score = 70
-    elif margin_expansion >= 50:
-        contract_score = 65
-        shipment_score = 60
-    elif margin_expansion >= 0:
-        contract_score = 50
-        shipment_score = 45
-    else:
-        contract_score = 35
-        shipment_score = 30
+    # Real data: read from LLMAnalysis cache table (populated by /enrich/llm)
+    llm_cache = session.query(LLMAnalysis).filter_by(
+        symbol=symbol, date=datetime.today().date()
+    ).first()
 
-    # Use ROCE trend as proxy for operational efficiency
-    if roce_trend >= 5:
-        hiring_score = 95
-        patent_score = 90
-    elif roce_trend >= 3:
-        hiring_score = 85
-        patent_score = 80
-    elif roce_trend >= 1:
-        hiring_score = 75
-        patent_score = 70
-    elif roce_trend >= 0:
-        hiring_score = 60
-        patent_score = 55
-    elif roce_trend >= -2:
-        hiring_score = 45
-        patent_score = 40
-    else:
-        hiring_score = 30
-        patent_score = 25
+    annual_report_score = llm_cache.annual_score if llm_cache and llm_cache.annual_score is not None else 0
+    concall_score = llm_cache.concall_score if llm_cache and llm_cache.concall_score is not None else 0
+    narrative_score = llm_cache.narrative_score if llm_cache and llm_cache.narrative_score is not None else 0
+    risk_score = llm_cache.risk_score if llm_cache and llm_cache.risk_score is not None else 0
+    governance_score = llm_cache.governance_score if llm_cache and llm_cache.governance_score is not None else 0
+    governance_language = governance_score  # same LLM output mapped for llm_score
+    sentiment_score = llm_cache.sentiment_score if llm_cache and llm_cache.sentiment_score is not None else 0
+    management_confidence = llm_cache.management_confidence if llm_cache and llm_cache.management_confidence is not None else 0
 
-    # Calculate heuristic scores for LLM Intelligence layer
-    # Based on quality indicators from available data
-    annual_report_score = 0
-    concall_score = 0
-    governance_score = 0
-    narrative_score = 0
-    risk_score = 0
-    management_confidence = 0
-
-    # Use fundamental quality as proxy for report quality
-    if roce >= 25 and debt_equity < 0.3:
-        annual_report_score = 98
-        concall_score = 95
-    elif roce >= 20 and debt_equity < 0.5:
-        annual_report_score = 90
-        concall_score = 85
-    elif roce >= 15 and debt_equity < 0.7:
-        annual_report_score = 80
-        concall_score = 75
-    elif roce >= 12 and debt_equity < 1.0:
-        annual_report_score = 70
-        concall_score = 65
-    elif roce >= 8:
-        annual_report_score = 60
-        concall_score = 55
-    else:
-        annual_report_score = 40
-        concall_score = 35
-
-    # Use promoter behavior as proxy for governance
-    if promoter_change >= 2 and pledge_percent < 2:
-        governance_score = 98
-        management_confidence = 95
-    elif promoter_change >= 0 and pledge_percent < 5:
-        governance_score = 85
-        management_confidence = 80
-    elif promoter_change >= -2 and pledge_percent < 10:
-        governance_score = 70
-        management_confidence = 65
-    elif pledge_percent < 15:
-        governance_score = 55
-        management_confidence = 50
-    else:
-        governance_score = 35
-        management_confidence = 30
-
-    governance_clean = True
-
-    # Use return consistency as proxy for narrative strength
-    if returns_1y >= 40 and returns_6m >= 20:
-        narrative_score = 95
-        risk_score = 90
-    elif returns_1y >= 30 and returns_6m >= 15:
-        narrative_score = 85
-        risk_score = 80
-    elif returns_1y >= 20 and returns_6m >= 10:
-        narrative_score = 75
-        risk_score = 70
-    elif returns_1y >= 10 and returns_6m >= 0:
-        narrative_score = 65
-        risk_score = 60
-    elif returns_1y >= 0:
-        narrative_score = 50
-        risk_score = 45
-    else:
-        narrative_score = 35
-        risk_score = 30
-
-    # Sector rotation: relative outperformance vs benchmark
+    # Sector rotation: relative outperformance vs benchmark (real derived metric)
     relative_perf = returns_1y - benchmark_return
     if relative_perf >= 30:
         sector_rotation = 95
@@ -463,44 +373,66 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
     else:
         sector_rotation = 25
 
-    # Sentiment score: promoter confidence + return momentum
-    if promoter_change >= 2 and returns_1y >= 20:
-        sentiment_score = 95
-    elif promoter_change >= 0 and returns_1y >= 10:
-        sentiment_score = 80
-    elif promoter_change >= -2 and returns_1y >= 0:
-        sentiment_score = 65
-    elif promoter_change >= -5:
-        sentiment_score = 45
-    else:
-        sentiment_score = 25
+    # --- Computed fields for new factor layers ---
+    revenue_prev = quarterly_data[1].revenue if quarterly_data and len(quarterly_data) > 1 else None
+    revenue_prev2 = quarterly_data[2].revenue if quarterly_data and len(quarterly_data) > 2 else None
+    pat_prev = quarterly_data[1].pat if quarterly_data and len(quarterly_data) > 1 else None
+    pat_prev2 = quarterly_data[2].pat if quarterly_data and len(quarterly_data) > 2 else None
+    op_profit = quarterly_data[0].operating_profit if quarterly_data and len(quarterly_data) > 0 else None
+    op_profit_prev = quarterly_data[1].operating_profit if quarterly_data and len(quarterly_data) > 1 else None
+    debt_equity_prev = quarterly_data[1].debt_equity if quarterly_data and len(quarterly_data) > 1 else None
 
-    # Governance language score: governance quality proxy
-    if governance_clean and not auditor_changed and pledge_percent < 2:
-        governance_language = 90
-    elif governance_clean and not auditor_changed:
-        governance_language = 75
-    elif not auditor_changed:
-        governance_language = 55
-    else:
-        governance_language = 30
+    eps_val = quarterly_data[0].eps if quarterly_data and len(quarterly_data) > 0 else None
 
-    # Insider trades: no real data available
+    pat_4q_vals = [q.pat for q in quarterly_data[:4] if q.pat is not None]
+    pat_4q_avg = sum(pat_4q_vals) / len(pat_4q_vals) if pat_4q_vals else None
+
+    pe_ratio = None
+    if eps_val is not None and eps_val > 0 and current_price and current_price > 0:
+        pe_ratio = round(current_price / eps_val, 2)
+
+    data_vol_60d = None
+    beta = None
+    if len(closes) > 60:
+        import numpy as np
+        close_arr = np.array(closes[:252][::-1]) if len(closes) >= 252 else np.array(closes[::-1])
+        if len(close_arr) > 60:
+            daily_ret = np.diff(close_arr) / close_arr[:-1]
+            data_vol_60d = np.std(daily_ret[-60:]) * np.sqrt(252) if len(daily_ret) >= 60 else None
+            try:
+                import yfinance as yf
+                if _nifty_hist_cache is None:
+                    _nifty_hist_cache = yf.Ticker("^NSEI").history(period="1y")
+                nf_hist = _nifty_hist_cache
+                if not nf_hist.empty:
+                    nf_closes = nf_hist["Close"].values
+                    min_len = min(len(close_arr), len(nf_closes))
+                    if min_len > 20:
+                        stock_ret = np.diff(close_arr[-min_len:]) / close_arr[-min_len:-1]
+                        nifty_ret = np.diff(nf_closes[-min_len:]) / nf_closes[-min_len:-1]
+                        if len(stock_ret) > 20 and np.std(nifty_ret) > 0:
+                            beta = np.cov(stock_ret, nifty_ret)[0, 1] / np.var(nifty_ret)
+                            beta = max(-2, min(3, beta))
+            except:
+                pass
+        if beta is None:
+            beta = 1.0
+
+    # Keep management_confidence/sentiment_score/governance_language from LLM cache above
     insider_trades = 0
+    compensation_quality = 0
 
-    # Compensation quality: use margin performance as proxy
-    if margin_expansion >= 100:
-        compensation_quality = 85
-    elif margin_expansion >= 50:
-        compensation_quality = 70
-    elif margin_expansion >= 0:
-        compensation_quality = 55
-    else:
-        compensation_quality = 35
+    avg_daily_value = None
+    if all_volumes and current_price:
+        avg_daily_value = (sum(all_volumes[:30]) / min(30, len(all_volumes))) * current_price
+    trading_days_pct = min(100, len(all_volumes) / 252 * 100) if all_volumes else 0
+    liquidity_score = min(100, max(0, (avg_daily_value or 0) / 5_000_000 * 100)) if avg_daily_value else 0
 
     data = {
         "symbol": symbol,
+        "sector": stock.sector or "Unknown",
         "company_name": stock.company_name or "",
+        "market_cap": stock.market_cap,
         "current_price": current_price,
         "returns_6m": returns_6m,
         "returns_1y": returns_1y,
@@ -517,22 +449,44 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         "fcf_trend": fcf_trend,
         "margin_stability": margin_stability,
         "promoter_change": promoter_change,
+        "fii_change": fii_change,
+        "dii_change": dii_change,
         "pledge_percent": pledge_percent,
         "roce_trend": roce_trend,
         "capex_efficiency": capex_efficiency,
+        "revenue": quarterly_data[0].revenue if quarterly_data and len(quarterly_data) > 0 else None,
+        "pat": quarterly_data[0].pat if quarterly_data and len(quarterly_data) > 0 else None,
+        "ebitda": quarterly_data[0].ebitda if quarterly_data and len(quarterly_data) > 0 else None,
+        "cash_conversion_ratio": cash_conversion,
+        "eps": quarterly_data[0].eps if quarterly_data and len(quarterly_data) > 0 else None,
+        "operating_margin": quarterly_data[0].operating_margin if quarterly_data and len(quarterly_data) > 0 else None,
+        "cash_flow_operations": quarterly_data[0].cash_flow_operations if quarterly_data and len(quarterly_data) > 0 else None,
+        "free_cash_flow": quarterly_data[0].free_cash_flow if quarterly_data and len(quarterly_data) > 0 else None,
+        "debt": quarterly_data[0].debt if quarterly_data and len(quarterly_data) > 0 else None,
+        "interest_expense": quarterly_data[0].interest_expense if quarterly_data and len(quarterly_data) > 0 else None,
+        "inventory": quarterly_data[0].inventory if quarterly_data and len(quarterly_data) > 0 else None,
+        "receivables": quarterly_data[0].receivables if quarterly_data and len(quarterly_data) > 0 else None,
+        "pe_ratio": pe_ratio,
+        "pb_ratio": None,
+        "ev_ebitda": None,
+        "dividend_yield": None,
+        "beta": beta,
+        "rolling_volatility_60d": data_vol_60d,
+        "seasonality": 0,
+        "nifty_500_member": True,
         "governance_clean": True,
         "relative_strength": 50 + returns_1y * 0.5,
-        "delivery_20d_avg": 0,
-        "delivery_today": 0,
+        "delivery_20d_avg": sum(all_volumes[:20]) / min(20, len(all_volumes)) if all_volumes else 0,
+        "delivery_today": all_volumes[0] if all_volumes else 0,
         "close": current_price,
         "vwap": vwap,
-        "delivery_percent": 0,
+        "delivery_percent": (all_volumes[0] - sum(all_volumes[1:21]) / min(20, len(all_volumes)-1)) / max(sum(all_volumes[1:21]) / min(20, len(all_volumes)-1), 1) * 100 if len(all_volumes) > 1 else 0,
         "price_change": price_change,
         "today_volume": all_volumes[0] if all_volumes else 1,
         "avg_30d_volume": sum(all_volumes[:30]) / min(30, len(all_volumes)) if all_volumes else 1,
         "atr_14": atr_14,
         "volume_spike": volume_spike,
-        "recent_bulk_buy": False,
+        "recent_bulk_buy": volume_ratio > 3 and abs(price_change) < 1,
         "stock_return": returns_1y,
         "benchmark_return": benchmark_return,
         "high_52w": high_52w,
@@ -572,6 +526,16 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
         "governance_language": governance_language,
         "insider_trades": insider_trades,
         "compensation_quality": compensation_quality,
+        "operating_profit": quarterly_data[0].operating_profit if quarterly_data and len(quarterly_data) > 0 else None,
+        "operating_profit_prev": op_profit_prev,
+        "revenue_prev": revenue_prev,
+        "revenue_prev2": revenue_prev2,
+        "pat_prev": pat_prev,
+        "pat_prev2": pat_prev2,
+        "debt_equity_prev": debt_equity_prev,
+        "pat_4q_avg": pat_4q_avg,
+        "revenue_yoy": ((quarterly_data[0].revenue - revenue_prev) / abs(revenue_prev) * 100) if quarterly_data and len(quarterly_data) > 0 and quarterly_data[0].revenue is not None and revenue_prev is not None and revenue_prev != 0 else None,
+        "cfo_negative_4q_count": cfo_negative_4q_count,
     }
 
     return data
@@ -580,7 +544,19 @@ def get_stock_data_for_scoring(symbol: str, session: Session) -> dict:
 def run_full_pipeline(force: bool = False):
     import time
     t0 = time.time()
+    _audit = AuditLogger()
+    _audit.log("pipeline_start", "scoring", "INFO", source="pipeline")
     print("PIPELINE START")
+
+    # Data freshness check
+    try:
+        freshness = DataFreshnessMonitor()
+        stale = freshness.get_stale_sources(48)
+        if stale:
+            print(f"[FRESHNESS] WARNING: Stale data sources: {[s['source_name'] for s in stale]}")
+        freshness.close()
+    except Exception as e:
+        print(f"[FRESHNESS] Check failed (non-blocking): {e}")
 
     """Execute complete pipeline: ingest → score → rank."""
     session = SessionLocal()
@@ -666,34 +642,86 @@ def run_full_pipeline(force: bool = False):
             if stock.symbol not in existing_shareholding:
                 if shareholding_ingestor.fetch_shareholding(stock.symbol):
                     shareholding_count += 1
+            if not stock.sector or stock.sector == 'Unknown':
+                try:
+                    ticker = yf.Ticker(f"{stock.symbol}.NS")
+                    info = ticker.info or {}
+                    sector = info.get('sector')
+                    if sector and str(sector).strip() not in ('', 'N/A', 'Unknown'):
+                        stock.sector = str(sector).strip()
+                except:
+                    pass
+        session.commit()
         print(f"DONE financials: {financial_count} new, shareholding: {shareholding_count} new, time:", time.time()-t0)
+
+        # Ingest corporate actions and insider trades
+        try:
+            from app.ingestion.corporate_actions import CorporateActionsIngestor
+            ca_count = CorporateActionsIngestor().ingest_all()
+            print(f"Corporate actions ingested: {ca_count} new")
+        except Exception as e:
+            print(f"Corporate actions ingestion skipped: {e}")
+
+        try:
+            from app.ingestion.insider_trades import InsiderTradesIngestor
+            it_count = InsiderTradesIngestor().ingest_all()
+            print(f"Insider trades ingested: {it_count} new")
+        except Exception as e:
+            print(f"Insider trades ingestion skipped: {e}")
+
+        # Data coverage validation
+        coverage = validate_data_coverage(session)
+        print(f"Data coverage: {coverage['status']}")
+        for field, info in coverage.get("fields", {}).items():
+            if not info["ok"]:
+                print(f"  WARNING: {field} only {info['covered_pct']}% covered (need >=70%)")
+        if coverage["status"] == "fail":
+            print("WARNING: Pipeline proceeding despite data coverage gaps")
+            print("See field-level breakdown for details")
+
+        print(f"Collecting data for all {len(all_stocks)} stocks...")
+        all_data = []
+        for stock in all_stocks:
+            data = get_stock_data_for_scoring(stock.symbol, session)
+            if data:
+                all_data.append(data)
+
+        ranker = PercentileRanker(all_data) if all_data else None
+        print(f"Collected {len(all_data)} stock data records, computing percentile ranks")
 
         scored_stocks = []
         eliminated_stocks = []
 
-        print(f"Scoring all {len(all_stocks)} stocks...")
-        batch_size = 100
-        for i in range(0, len(all_stocks), batch_size):
-            batch = all_stocks[i:i + batch_size]
-            for stock in batch:
-                data = get_stock_data_for_scoring(stock.symbol, session)
-                if data:
-                    passed, stages = run_elimination_pipeline(stock.symbol, session, data)
-                    score = alpha_score(data)
-                    data['total_score'] = score
-                    data['elimination_stages'] = stages
-                    data['passed_elimination'] = passed
-                    scored_stocks.append(data)
-                    if not passed:
-                        eliminated_stocks.append({
-                            'symbol': stock.symbol,
-                            'stages': stages
-                        })
-            
-            if (i // batch_size + 1) % 5 == 0:
-                print(f"  Processed {min(i + batch_size, len(all_stocks))}/{len(all_stocks)} stocks")
+        print(f"Scoring all {len(all_data)} stocks with percentile ranking...")
+        for data in all_data:
+            passed, stages = run_elimination_pipeline(data['symbol'], session, data)
+            breakdown = get_score_breakdown(data, ranker)
+            data['_breakdown'] = breakdown
+            data['total_score'] = breakdown['total_score']
+            data['composite'] = breakdown['composite']
+            data['penalty'] = breakdown['penalty']
+            data['penalty_detail'] = breakdown.get('penalty_detail', {})
+            data['confidence_score'] = breakdown.get('confidence', 0)
+            data['elimination_stages'] = stages
+            data['passed_elimination'] = passed
+            for layer_key, layer_info in breakdown['layers'].items():
+                data[f'{layer_key}_score'] = layer_info['score']
+            data['layer_breakdown_json'] = json.dumps(breakdown)
+            scored_stocks.append(data)
+            if not passed:
+                eliminated_stocks.append({
+                    'symbol': data['symbol'],
+                    'stages': stages
+                })
 
         print(f"Scored {len(scored_stocks)} stocks, {len(eliminated_stocks)} eliminated")
+
+        # Apply cross-sectional z-score normalization to all layer scores
+        print("Applying z-score normalization to layer scores...")
+        batch_normalize_scores(scored_stocks)
+        for sd in scored_stocks:
+            sd['layer_breakdown_json'] = json.dumps(sd.get('_breakdown', {}))
+        print("Z-score normalization complete")
 
         ranked = sorted(
             scored_stocks,
@@ -711,6 +739,22 @@ def run_full_pipeline(force: bool = False):
                 symbol=stock_data['symbol'],
                 company_name=stock_data.get('company_name', ''),
                 total_score=stock_data.get('total_score', 0),
+                fundamental_score=stock_data.get('quality_score'),
+                value_score=stock_data.get('value_score'),
+                quality_score=stock_data.get('quality_score'),
+                momentum_score=stock_data.get('momentum_score'),
+                growth_score=stock_data.get('growth_score'),
+                management_score=stock_data.get('management_score'),
+                institutional_score=stock_data.get('microstructure_score'),
+                microstructure_score=stock_data.get('microstructure_score'),
+                forensic_score=stock_data.get('forensic_score'),
+                lowvol_score=stock_data.get('lowvol_score'),
+                alternative_score=stock_data.get('alternative_score'),
+                macro_score=stock_data.get('macro_score'),
+                technical_score=stock_data.get('technical_score'),
+                llm_score=stock_data.get('llm_score'),
+                confidence_score=stock_data.get('confidence_score'),
+                layer_breakdown_json=stock_data.get('layer_breakdown_json'),
                 current_price=stock_data.get('current_price'),
                 returns_6m=stock_data.get('returns_6m'),
                 returns_1y=stock_data.get('returns_1y'),
@@ -748,6 +792,52 @@ def run_full_pipeline(force: bool = False):
         session.commit()
         print(f"Saved {len(ranked)} scored stocks to database")
 
+        # Insert score snapshot
+        snapshot_date = datetime.today().date()
+        for sd in ranked:
+            snap = ScoreSnapshot(
+                date=snapshot_date,
+                symbol=sd['symbol'],
+                total_score=sd.get('total_score'),
+                quality_score=sd.get('quality_score'),
+                growth_score=sd.get('growth_score'),
+                technical_score=sd.get('technical_score'),
+                microstructure_score=sd.get('microstructure_score'),
+                management_score=sd.get('management_score'),
+                forensic_score=sd.get('forensic_score'),
+                lowvol_score=sd.get('lowvol_score'),
+                value_score=sd.get('value_score'),
+                confidence_score=sd.get('confidence_score'),
+                layer_breakdown_json=sd.get('layer_breakdown_json'),
+            )
+            session.merge(snap)
+        session.commit()
+        print(f"Snapshot saved: {snapshot_date} ({len(ranked)} stocks)")
+
+        # Data health monitor
+        try:
+            from app.services.data_health_monitor import DataHealthMonitor
+            health = DataHealthMonitor.run(session)
+            health.to_json("/tmp/data_health_report.json")
+            print(f"\nData Health [{health.severity.upper()}]:")
+            print(health.summary())
+            if health.is_critical:
+                print("CRITICAL: Data health issues block pipeline integrity")
+        except Exception as e:
+            print(f"Data health monitor skipped: {e}")
+
+        # Record successful data fetch
+        try:
+            freshness = DataFreshnessMonitor()
+            freshness.record_success("yfinance_prices")
+            freshness.record_success("yfinance_financials")
+            freshness.close()
+        except Exception:
+            pass
+
+        _dur = int((time.time() - t0) * 1000)
+        _audit.log_success("pipeline_complete", "scoring", details=f"{len(scored_stocks)} stocks scored", source="pipeline", duration_ms=_dur)
+        _audit.close()
         return {
             "status": "success",
             "processed": processed,
@@ -761,6 +851,8 @@ def run_full_pipeline(force: bool = False):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        _audit.log_failure("pipeline_error", "scoring", str(e), source="pipeline")
+        _audit.close()
         print(f"Pipeline error: {e}")
         session.rollback()
         return {"error": str(e), "stocks": []}

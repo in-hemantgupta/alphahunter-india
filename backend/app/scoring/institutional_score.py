@@ -1,5 +1,4 @@
-def institutional_score(data, _debug=False):
-
+def institutional_score(data, ranker=None, _debug=False):
     delivery_ratio = data.get("delivery_ratio") or 1
     volume_ratio = data.get("volume_ratio") or 1
     volume_high = data.get("volume_high", False)
@@ -7,20 +6,15 @@ def institutional_score(data, _debug=False):
     vwap_defense = data.get("vwap_defense", False)
     price_compression = data.get("price_compression", False)
     seller_exhaustion = data.get("seller_exhaustion", False)
-    bulk_deal_positive = data.get("bulk_deal_positive", False)
+    fii_change = data.get("fii_change")
+    dii_change = data.get("dii_change")
 
-    if delivery_ratio >= 2.5:
-        delivery_score = 100
-    elif delivery_ratio >= 2.0:
-        delivery_score = 90
-    elif delivery_ratio >= 1.5:
-        delivery_score = 75
-    elif delivery_ratio >= 1.2:
-        delivery_score = 60
-    elif delivery_ratio >= 1.0:
-        delivery_score = 45
+    if ranker:
+        delivery_score = ranker.pct("delivery_ratio", min(delivery_ratio, 5))
+        volume_score = ranker.pct("volume_ratio", min(volume_ratio, 10))
     else:
-        delivery_score = 25
+        delivery_score = min(100, (delivery_ratio - 0.5) * 40)
+        volume_score = min(100, volume_ratio * 25)
 
     if volume_high and price_flat:
         float_absorption = 90
@@ -31,32 +25,26 @@ def institutional_score(data, _debug=False):
     else:
         float_absorption = 35
 
-    if volume_ratio >= 4:
-        volume_anomaly = 100
-    elif volume_ratio >= 3:
-        volume_anomaly = 85
-    elif volume_ratio >= 2:
-        volume_anomaly = 70
-    elif volume_ratio >= 1.5:
-        volume_anomaly = 55
-    elif volume_ratio >= 1.0:
-        volume_anomaly = 40
-    else:
-        volume_anomaly = 25
-
     vwap_score = 80 if vwap_defense else 35
     compression_score = 80 if price_compression else 35
     exhaustion_score = 80 if seller_exhaustion else 35
-    bulk_score = 90 if bulk_deal_positive else 30
+
+    fii_score = 50
+    dii_score = 50
+    if fii_change is not None:
+        fii_score = min(100, max(0, 50 + fii_change * 5))
+    if dii_change is not None:
+        dii_score = min(100, max(0, 50 + dii_change * 5))
 
     score = (
-        delivery_score * 0.25 +
-        float_absorption * 0.20 +
-        volume_anomaly * 0.15 +
-        vwap_score * 0.15 +
+        delivery_score * 0.20 +
+        float_absorption * 0.15 +
+        volume_score * 0.10 +
+        vwap_score * 0.10 +
         compression_score * 0.10 +
         exhaustion_score * 0.10 +
-        bulk_score * 0.05
+        fii_score * 0.15 +
+        dii_score * 0.10
     )
 
     final = min(100, max(0, score))
@@ -65,13 +53,14 @@ def institutional_score(data, _debug=False):
         return final, {
             "score": final,
             "components": {
-                "delivery_ratio": {"raw": delivery_ratio, "score": delivery_score, "weight": 0.25},
-                "float_absorption": {"raw": {"volume_high": volume_high, "price_flat": price_flat}, "score": float_absorption, "weight": 0.20},
-                "volume_anomaly": {"raw": volume_ratio, "score": volume_anomaly, "weight": 0.15},
-                "vwap_defense": {"raw": vwap_defense, "score": vwap_score, "weight": 0.15},
+                "delivery_ratio": {"raw": delivery_ratio, "score": delivery_score, "weight": 0.20},
+                "float_absorption": {"raw": {"volume_high": volume_high, "price_flat": price_flat}, "score": float_absorption, "weight": 0.15},
+                "volume_anomaly": {"raw": volume_ratio, "score": volume_score, "weight": 0.10},
+                "vwap_defense": {"raw": vwap_defense, "score": vwap_score, "weight": 0.10},
                 "price_compression": {"raw": price_compression, "score": compression_score, "weight": 0.10},
                 "seller_exhaustion": {"raw": seller_exhaustion, "score": exhaustion_score, "weight": 0.10},
-                "bulk_deal": {"raw": bulk_deal_positive, "score": bulk_score, "weight": 0.05},
+                "fii_change": {"raw": fii_change, "score": fii_score, "weight": 0.15},
+                "dii_change": {"raw": dii_change, "score": dii_score, "weight": 0.10},
             }
         }
 

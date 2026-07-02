@@ -167,7 +167,7 @@ export default function Universe() {
           )}
         </div>
       )}
-    </div>
+
       {selectedSymbol && (
         <StockBreakdownModal
           symbol={selectedSymbol}

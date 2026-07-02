@@ -1,61 +1,33 @@
-def fundamental_score(data, _debug=False):
-
+def fundamental_score(data, ranker=None, _debug=False):
     roce = data.get("roce") or 0
     debt_equity = data.get("debt_equity") or 1
-    operating_cashflow = data.get("operating_cashflow") or 0
-    fcf_trend = data.get("fcf_trend") or 0
+    operating_margin = data.get("operating_margin") or 0
     margin_stability = data.get("margin_stability") or 0
-
-    if roce >= 25:
-        roce_score = 100
-    elif roce >= 20:
-        roce_score = 85
-    elif roce >= 15:
-        roce_score = 70
-    elif roce >= 10:
-        roce_score = 50
-    elif roce >= 5:
-        roce_score = 30
-    else:
-        roce_score = 10
-
-    if debt_equity <= 0:
-        debt_score = 100
-    elif debt_equity < 0.3:
-        debt_score = 90
-    elif debt_equity < 0.5:
-        debt_score = 80
-    elif debt_equity < 0.7:
-        debt_score = 70
-    elif debt_equity < 1.0:
-        debt_score = 50
-    elif debt_equity < 1.5:
-        debt_score = 30
-    else:
-        debt_score = 10
-
-    if operating_cashflow > 0:
-        fcf_score = 70
-        if fcf_trend > 0:
-            fcf_score = 100
-        elif fcf_trend == 0:
-            fcf_score = 70
-    else:
-        fcf_score = 20
-
-    stability = min(100, max(0, margin_stability))
-
-    asset_turnover_score = 60
     revenue = data.get("revenue") or 0
-    if revenue > 0:
-        asset_turnover_score = 70
+    pat = data.get("pat") or 0
+    sector = data.get("sector")
+
+    if ranker:
+        roce_score = ranker.pct("roce", roce, sector=sector)
+        debt_score = ranker.inverse_pct("debt_equity", min(debt_equity, 10), sector=sector)
+        margin_score = ranker.pct("operating_margin", operating_margin, sector=sector)
+        stability_val = ranker.pct("margin_stability", margin_stability, sector=sector)
+    else:
+        roce_score = min(100, roce * 4)
+        debt_score = max(0, 100 - min(debt_equity, 5) * 20)
+        margin_score = min(100, max(0, operating_margin * 5))
+        stability_val = min(100, margin_stability)
+
+    revenue_score = 60 if revenue > 0 else 30
+    pat_score = 60 if pat > 0 else 20
 
     score = (
         roce_score * 0.30 +
         debt_score * 0.20 +
-        fcf_score * 0.20 +
-        stability * 0.15 +
-        asset_turnover_score * 0.15
+        margin_score * 0.15 +
+        stability_val * 0.15 +
+        revenue_score * 0.10 +
+        pat_score * 0.10
     )
 
     final = min(100, max(0, score))
@@ -66,9 +38,10 @@ def fundamental_score(data, _debug=False):
             "components": {
                 "roce": {"raw": roce, "score": roce_score, "weight": 0.30},
                 "debt_equity": {"raw": debt_equity, "score": debt_score, "weight": 0.20},
-                "cashflow": {"raw": operating_cashflow, "score": fcf_score, "weight": 0.20, "fcf_trend": fcf_trend},
-                "margin_stability": {"raw": margin_stability, "score": stability, "weight": 0.15},
-                "asset_turnover": {"raw": revenue, "score": asset_turnover_score, "weight": 0.15},
+                "operating_margin": {"raw": operating_margin, "score": margin_score, "weight": 0.15},
+                "margin_stability": {"raw": margin_stability, "score": stability_val, "weight": 0.15},
+                "revenue": {"raw": revenue, "score": revenue_score, "weight": 0.10},
+                "profitability": {"raw": pat, "score": pat_score, "weight": 0.10},
             }
         }
 

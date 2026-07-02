@@ -11,6 +11,8 @@ from app.models.scored_stock import ScoredStock
 from app.services.pipeline import run_full_pipeline, get_stock_data_for_scoring
 from app.services.elimination import run_elimination_pipeline
 from app.scoring.alpha_engine import alpha_score, get_score_breakdown
+from app.ingestion.alternative_ingestor import enrich_hiring_async, enrich_news
+from app.ingestion.llm_enricher import run_llm_enrichment
 
 app = FastAPI(title="QuantumAlpha India API")
 
@@ -162,6 +164,68 @@ def get_stock(symbol: str):
             data["elimination_passed"] = passed
             data["elimination_stages"] = stages
         return {"symbol": symbol, "data": data}
+    finally:
+        session.close()
+
+
+@app.post("/enrich/alternative")
+def enrich_alternative_endpoint(limit: int = 2395):
+    """Enrich stocks with news and hiring data."""
+    session = SessionLocal()
+    try:
+        result = enrich_news(session, limit=limit)
+        return {"status": "ok", "result": result}
+    finally:
+        session.close()
+
+
+@app.post("/enrich/hiring")
+async def enrich_hiring_endpoint(limit: int = 500):
+    """Enrich stocks with hiring data via freehire.dev API."""
+    session = SessionLocal()
+    try:
+        result = await enrich_hiring_async(session, limit=limit)
+        return {"status": "ok", "result": result}
+    finally:
+        session.close()
+
+
+@app.post("/enrich/news")
+def enrich_news_endpoint(limit: int = 2395):
+    """Enrich stocks with news sentiment data from RSS feeds."""
+    session = SessionLocal()
+    try:
+        result = enrich_news(session, limit=limit)
+        return {"status": "ok", "result": result}
+    finally:
+        session.close()
+
+
+@app.post("/enrich/llm")
+async def enrich_llm_endpoint(limit: int = 200):
+    """Enrich top N stocks with LLM analysis via Groq."""
+    session = SessionLocal()
+    try:
+        result = await run_llm_enrichment(session, limit=limit)
+        return {"status": "ok", "result": result}
+    finally:
+        session.close()
+
+
+from pydantic import BaseModel
+
+
+class LLMEnrichRequest(BaseModel):
+    symbols: list[str]
+
+
+@app.post("/enrich/llm/symbols")
+async def enrich_llm_symbols_endpoint(req: LLMEnrichRequest):
+    """Enrich specific stocks (by symbol list) with LLM analysis via Groq."""
+    session = SessionLocal()
+    try:
+        result = await run_llm_enrichment(session, symbols=req.symbols)
+        return {"status": "ok", "result": result}
     finally:
         session.close()
 
